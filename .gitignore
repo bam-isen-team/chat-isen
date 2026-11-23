@@ -1,0 +1,21 @@
+# Rust
+backend/target/
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+coverage/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Docker
+postgres-data/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store

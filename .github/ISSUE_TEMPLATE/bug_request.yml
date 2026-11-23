@@ -1,0 +1,82 @@
+name: Bug report
+description: Report a malfunction or unexpected behavior
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the issue precisely so that it can be reproduced.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: Describe the observed problem and its impact.
+      placeholder: "Example: The application displays an error when..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the actions to perform in order.
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe what should happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe what happens instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Select the environment where the bug occurs.
+      options:
+        - Local
+        - Docker
+        - Development
+        - Staging
+        - Production
+    validations:
+      required: true
+
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions and technical environment
+      description: Provide versions that may help reproduce the issue.
+      placeholder: |
+        - OS :
+        - Browser :
+        - Node.js version :
+        - Docker :
+    validations:
+      required: false
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and screenshots
+      description: Add screenshots, error messages, or relevant API responses.
+      placeholder: Paste logs here or attach screenshots.
+    validations:
+      required: false

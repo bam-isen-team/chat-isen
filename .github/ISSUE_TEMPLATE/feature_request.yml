@@ -1,0 +1,77 @@
+name: Feature request
+description: Suggest a new feature or improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe your feature request clearly and explain the problem it would solve.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the problem or limitation you are experiencing.
+      placeholder: "Example: It is difficult to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the feature or improvement you would like to see.
+      placeholder: "Example: Add a..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe other solutions or workarounds you have considered.
+      placeholder: "Example: Currently, I work around this by..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: value
+    attributes:
+      label: Use cases and expected value
+      description: Explain who would benefit and how the feature would be used.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: Select the priority that best matches this request.
+      options:
+        - Low
+        - Medium
+        - High
+        - Critical
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List the conditions that must be met for this feature to be complete.
+      placeholder: |
+        - [ ] The user can ...
+        - [ ] The feature is covered by tests
+        - [ ] The documentation is updated
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add mockups, API examples, links, or any other useful information.
+    validations:
+      required: false

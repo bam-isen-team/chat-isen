@@ -1,0 +1,35 @@
+# chat-isen local orchestration.
+#
+# Each application service lives in its own folder with its own Dockerfile:
+#
+#   - db/       : PostgreSQL — schema created by init.sql on first boot
+#   - backend/  : Rust/Axum API (to come)
+#   - frontend/ : Preact SPA   (to come)
+#
+# Database credentials come from the .env file at the repository root
+# (see .env.example).
+
+services:
+  db:
+    build: ./db
+    container_name: chat-isen-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chatisen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-chatisen}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # NB: since postgres 18, the mount point is /var/lib/postgresql
+      # (not .../data as in previous versions).
+      - db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  db_data:

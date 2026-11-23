@@ -22,30 +22,41 @@ CREATE TABLE users (
     display_name    varchar(64)     NOT NULL,
     avatar_url      text,
     presence_status presence_status NOT NULL DEFAULT 'offline',
+    -- Bumped on global sign-out / password change; access tokens carry the
+    -- matching "ver" claim so stale ones get rejected (cf. ADR-001 §3).
+    token_version   int             NOT NULL DEFAULT 0,
     created_at      timestamptz     NOT NULL DEFAULT now(),
     updated_at      timestamptz     NOT NULL DEFAULT now()
 );
 -- Case-insensitive email uniqueness (Alice@x.fr = alice@x.fr).
 CREATE UNIQUE INDEX users_email_lower_uq ON users (lower(email));
 
--- ---------- sessions (to be confirmed: server-side sessions or JWT) ----------
-CREATE TABLE sessions (
+-- ---------- refresh_tokens (cf. ADR-001: JWT access + rotating opaque refresh) ----------
+CREATE TABLE refresh_tokens (
     id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id     uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     -- We store the SHA-256 of the token, not the token itself: a database leak
-    -- does not allow sessions to be reused.
+    -- does not allow any token to be replayed.
     token_hash  bytea       NOT NULL UNIQUE,
+    -- Tokens issued by the same login form a family, so that a replayed
+    -- token revokes the whole lineage at once.
+    family      uuid        NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now(),
     expires_at  timestamptz NOT NULL,
     revoked_at  timestamptz,
+    -- Successor token after a rotation (cf. ADR-001 §3: the consumed token
+    -- is marked as replaced); keeps the chain auditable.
+    replaced_by uuid        REFERENCES refresh_tokens (id) ON DELETE SET NULL,
     user_agent  text,
     ip_address  inet,
     CHECK (expires_at > created_at)
 );
--- "A user's sessions" (log out of all devices, list sessions).
-CREATE INDEX sessions_user_id_idx ON sessions (user_id);
--- Purging expired sessions.
-CREATE INDEX sessions_expires_at_idx ON sessions (expires_at);
+-- "A user's refresh tokens" (global sign-out: revoke everything at once).
+CREATE INDEX refresh_tokens_user_id_idx ON refresh_tokens (user_id);
+-- Family revocation on reuse detection (cf. ADR-001 §3).
+CREATE INDEX refresh_tokens_family_idx ON refresh_tokens (family);
+-- Purging expired refresh tokens.
+CREATE INDEX refresh_tokens_expires_at_idx ON refresh_tokens (expires_at);
 
 -- ---------- conversations ----------
 CREATE TABLE conversations (

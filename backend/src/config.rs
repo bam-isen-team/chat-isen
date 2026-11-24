@@ -11,7 +11,7 @@ impl Config {
         Self {
             database_url,
             jwt_secret,
-            bind_addr
+            bind_addr,
         }
     }
 

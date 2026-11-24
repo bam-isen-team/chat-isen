@@ -57,3 +57,93 @@ pub fn verify_password(plain: &str, phc: &str) -> Result<bool, PasswordError> {
         Err(e) => Err(PasswordError::InvalidHash(e)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{hash_password, verify_password, PasswordError};
+    use rstest::{fixture, rstest};
+
+    // Reference password for the "wrong password" matrix.
+    const REFERENCE_PWD: &str = "correct horse battery staple";
+
+    // The primary contract: a hash this module produces can be verified back.
+    // It is the canary of the module — the first test to fail if an argon2
+    // upgrade ever breaks the roundtrip, long before any endpoint does.
+    #[rstest]
+    fn roundtrip_works() {
+        let phc = hash_password("test").expect("hashing should succeed");
+        let ok =
+            verify_password("test", &phc).expect("a well-formed hash must verify without error");
+        assert!(ok);
+    }
+
+    // One Argon2id hash of the reference password, amortized over the cases
+    // below (hashing is slow ON PURPOSE; never pay it repeatedly for nothing).
+    #[fixture]
+    fn stored_hash() -> String {
+        hash_password(REFERENCE_PWD).expect("hashing the reference password should succeed")
+    }
+
+    // Contract of the future 401 (cf. ADR-001 §2): a wrong password is a clean
+    // `Ok(false)`, never a system error. If this test ever fails with an Err,
+    // the login layer would start answering 500 to bad credentials.
+    #[rstest]
+    #[case::empty("")]
+    #[case::almost_identical("correct horse battery stapl")]
+    #[case::case_swapped("Correct horse battery staple")]
+    #[case::long_garbage("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    fn wrong_password_is_false_not_an_error(stored_hash: String, #[case] candidate: &str) {
+        let ok = verify_password(candidate, &stored_hash)
+            .expect("a wrong password must be a clean false, never a system error");
+        assert!(!ok);
+    }
+
+    // Fresh salt on every call: same password in, two different hashes out —
+    // yet both valid. Without a fresh salt, two users sharing a password would
+    // show IDENTICAL password_hash columns in a database dump.
+    #[rstest]
+    fn same_password_yields_different_hashes() {
+        let hash1 = hash_password("letmein123").expect("hashing should succeed");
+        let hash2 = hash_password("letmein123").expect("hashing should succeed");
+        assert_ne!(hash1, hash2);
+        // Different outputs, but both must still open the same door.
+        assert!(verify_password("letmein123", &hash1).expect("verify hash1"));
+        assert!(verify_password("letmein123", &hash2).expect("verify hash2"));
+    }
+
+    // Cross-artifact coherence: what Rust produces must satisfy what the SQL
+    // CHECK (`password_hash LIKE '$argon2%'`) will enforce at insert time.
+    #[rstest]
+    fn hash_format_matches_sql_check() {
+        let phc = hash_password("formatting").expect("hashing should succeed");
+        assert!(phc.starts_with("$argon2"), "must satisfy the users CHECK");
+        assert!(phc.starts_with("$argon2id"), "ADR-001 mandates argon2id");
+        assert!(phc.contains("v=19"), "PHC version marker");
+    }
+
+    // Hostile input: an unparseable stored hash is a Parse error, never a panic
+    // (this string will one day come from database content we do not control).
+    #[rstest]
+    #[case::empty("")]
+    #[case::truncated("$argon2id$")]
+    #[case::not_phc("0xdeadbeef")]
+    fn malformed_hash_is_an_error_not_a_panic(#[case] bad: &str) {
+        let res = verify_password("whatever", bad);
+        assert!(
+            matches!(res, Err(PasswordError::Parse(_))),
+            "expected a Parse error, got: {res:?}"
+        );
+    }
+
+    // Edge exploration: pin what the hashing LAYER does for extreme inputs.
+    // The registration POLICY (non-empty, bounded length) is M3's validation
+    // job — remember that layer split when this surprises you.
+    #[rstest]
+    #[case::empty_password(String::new())]
+    #[case::very_long("x".repeat(1000))]
+    fn hashing_survives_extreme_lengths(#[case] password: String) {
+        let phc = hash_password(&password).expect("hashing should succeed");
+        let ok = verify_password(&password, &phc).expect("verify should succeed");
+        assert!(ok);
+    }
+}

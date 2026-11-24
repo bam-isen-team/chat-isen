@@ -58,8 +58,7 @@ pub fn mint_access_token(secret: &str, sub: &str, ver: i64) -> Result<String, Jw
         ver,
     };
 
-    encode(&header, &claims, &key)
-        .map_err(JwtError::Mint)
+    encode(&header, &claims, &key).map_err(JwtError::Mint)
 }
 
 /// Verify an access token and return its claims.

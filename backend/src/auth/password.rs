@@ -3,9 +3,9 @@
 //! Hashes are stored as PHC strings in `users.password_hash`; the SQL CHECK
 //! (`password_hash LIKE '$argon2%'`) and this module must stay aligned.
 
+use argon2::Argon2;
 use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
-use argon2::Argon2;
 
 // NOTE: alias the library error types to keep our own error enum readable.
 use argon2::password_hash::Error as HashError;
@@ -60,7 +60,7 @@ pub fn verify_password(plain: &str, phc: &str) -> Result<bool, PasswordError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_password, verify_password, PasswordError};
+    use super::{PasswordError, hash_password, verify_password};
     use rstest::{fixture, rstest};
 
     // Reference password for the "wrong password" matrix.

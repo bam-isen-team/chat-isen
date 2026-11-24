@@ -90,14 +90,17 @@ mod tests {
 
     #[rstest]
     fn roundtrip_preserves_identity() {
-        let token = mint_access_token(TEST_SECRET, "user-uuid-1234", 7)
-            .expect("minting should succeed");
-        let claims = verify_access_token(TEST_SECRET, &token)
-            .expect("a freshly minted token must verify");
+        let token =
+            mint_access_token(TEST_SECRET, "user-uuid-1234", 7).expect("minting should succeed");
+        let claims =
+            verify_access_token(TEST_SECRET, &token).expect("a freshly minted token must verify");
 
         assert_eq!(claims.sub, "user-uuid-1234");
         assert_eq!(claims.ver, 7);
-        assert!(!claims.jti.is_empty(), "jti is mint-generated, it must exist");
+        assert!(
+            !claims.jti.is_empty(),
+            "jti is mint-generated, it must exist"
+        );
         // ADR-001 §1: access tokens live exactly 10 minutes. Literal on
         // purpose: changing the TTL must force revisiting the ADR.
         assert_eq!(claims.exp - claims.iat, 600);
@@ -121,8 +124,8 @@ mod tests {
             ver: 3,
         };
         let key = EncodingKey::from_base64_secret(TEST_SECRET).expect("valid base64 secret");
-        let token = encode(&Header::new(Algorithm::HS256), &claims, &key)
-            .expect("forging should succeed");
+        let token =
+            encode(&Header::new(Algorithm::HS256), &claims, &key).expect("forging should succeed");
 
         let res = verify_access_token(TEST_SECRET, &token);
         assert!(matches!(res, Err(JwtError::Invalid(_))), "got: {res:?}");
@@ -142,8 +145,8 @@ mod tests {
             ver: 0,
         };
         let key = EncodingKey::from_base64_secret(TEST_SECRET).expect("valid base64 secret");
-        let token = encode(&Header::new(Algorithm::HS512), &claims, &key)
-            .expect("forging should succeed");
+        let token =
+            encode(&Header::new(Algorithm::HS512), &claims, &key).expect("forging should succeed");
 
         let res = verify_access_token(TEST_SECRET, &token);
         assert!(matches!(res, Err(JwtError::Invalid(_))), "got: {res:?}");
@@ -151,8 +154,7 @@ mod tests {
 
     #[rstest]
     fn wrong_secret_is_rejected() {
-        let token = mint_access_token(TEST_SECRET, "user-uuid", 1)
-            .expect("minting should succeed");
+        let token = mint_access_token(TEST_SECRET, "user-uuid", 1).expect("minting should succeed");
 
         let res = verify_access_token(OTHER_SECRET, &token);
         assert!(matches!(res, Err(JwtError::Invalid(_))), "got: {res:?}");

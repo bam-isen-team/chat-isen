@@ -4,6 +4,9 @@ use axum::Json;
 use serde_json::json;
 use thiserror::Error;
 
+use crate::auth::jwt::JwtError;
+use crate::auth::password::PasswordError;
+
 /// Application-wide HTTP errors (cf. M3): each variant becomes a clean API
 /// response via `IntoResponse` — never a raw panic, never a leaked detail.
 #[derive(Debug, Error)]
@@ -36,5 +39,25 @@ impl IntoResponse for AppError {
         };
 
         (status, Json(json!({ "error": message }))).into_response()
+    }
+}
+
+// ---- `?` bridges: domain errors → HTTP families ----
+// Hashing (M1) and minting (M2) are server-side operations: their failures
+// are never the client's fault, so they become Internal (500). The cause is
+// traced HERE, at the conversion point itself, so that no mapping site can
+// ever forget to diagnose it.
+
+impl From<PasswordError> for AppError {
+    fn from(err: PasswordError) -> Self {
+        tracing::error!(cause = %err, "password hashing failed");
+        AppError::Internal
+    }
+}
+
+impl From<JwtError> for AppError {
+    fn from(err: JwtError) -> Self {
+        tracing::error!(cause = %err, "jwt operation failed");
+        AppError::Internal
     }
 }

@@ -1,5 +1,3 @@
-use axum::Router;
-
 mod config;
 mod routes;
 mod state;

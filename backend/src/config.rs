@@ -1,9 +1,9 @@
 use std::net::SocketAddr;
 
 pub struct Config {
-    database_url: String,
-    jwt_secret: String,
-    bind_addr: SocketAddr,
+    pub(crate) database_url: String,
+    pub(crate) jwt_secret: String,
+    pub(crate) bind_addr: SocketAddr,
 }
 
 impl Config {

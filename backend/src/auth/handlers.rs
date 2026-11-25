@@ -143,6 +143,17 @@ fn invalid_refresh_response() -> Response {
         Json(serde_json::json!({ "error": "invalid refresh token" })),
     )
         .into_response();
+    clear_refresh_cookie(&mut response);
+    response
+}
+
+fn logout_response() -> Response {
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    clear_refresh_cookie(&mut response);
+    response
+}
+
+fn clear_refresh_cookie(response: &mut Response) {
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_static(
@@ -152,7 +163,6 @@ fn invalid_refresh_response() -> Response {
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
 
 fn auth_response(
@@ -457,6 +467,58 @@ pub async fn refresh(
         },
         &successor.raw,
     )
+}
+
+pub async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let Some(raw_token) = refresh_token_from_headers(&headers) else {
+        return Ok(logout_response());
+    };
+    let token_hash = hash_refresh_token(raw_token);
+
+    let mut client = state.pool.get().await.map_err(|err| {
+        tracing::error!(cause = %err, "db pool checkout failed during logout");
+        AppError::Internal
+    })?;
+    let transaction = client.transaction().await.map_err(|err| {
+        tracing::error!(cause = %err, "starting logout transaction failed");
+        AppError::Internal
+    })?;
+
+    let token = transaction
+        .query_opt(
+            "SELECT family FROM refresh_tokens WHERE token_hash = $1 FOR UPDATE",
+            &[&token_hash],
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!(cause = %err, "looking up logout refresh token failed");
+            AppError::Internal
+        })?;
+
+    if let Some(token) = token {
+        let family: uuid::Uuid = token.get("family");
+        transaction
+            .execute(
+                "UPDATE refresh_tokens SET revoked_at = now() \
+                 WHERE family = $1 AND revoked_at IS NULL",
+                &[&family],
+            )
+            .await
+            .map_err(|err| {
+                tracing::error!(cause = %err, "revoking logout refresh-token family failed");
+                AppError::Internal
+            })?;
+    }
+
+    transaction.commit().await.map_err(|err| {
+        tracing::error!(cause = %err, "committing logout transaction failed");
+        AppError::Internal
+    })?;
+
+    Ok(logout_response())
 }
 
 #[cfg(test)]

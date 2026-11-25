@@ -101,6 +101,16 @@ async fn post_refresh(app: Router, token: Option<&str>) -> axum::response::Respo
         .expect("refresh router should respond")
 }
 
+async fn post_logout(app: Router, token: Option<&str>) -> axum::response::Response {
+    let mut request = Request::builder().method("POST").uri("/auth/logout");
+    if let Some(token) = token {
+        request = request.header(header::COOKIE, format!("refresh_token={token}"));
+    }
+    app.oneshot(request.body(Body::empty()).expect("build logout request"))
+        .await
+        .expect("logout router should respond")
+}
+
 fn refresh_cookie_value(response: &axum::response::Response) -> String {
     response.headers()[header::SET_COOKIE]
         .to_str()
@@ -532,4 +542,101 @@ async fn concurrent_refresh_reuse_detects_replay_and_revokes_family() {
     assert_eq!(active_tokens, 0);
     drop(client);
     cleanup_user(&pool, &username).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
+async fn logout_revokes_refresh_token_family_and_clears_cookie() {
+    let (app, pool) = test_app();
+    let (username, email) = unique_credentials();
+    let registered = post_register(
+        app.clone(),
+        &username,
+        &email,
+        "correct horse battery staple",
+    )
+    .await;
+    assert_eq!(registered.status(), StatusCode::CREATED);
+    let initial_token = refresh_cookie_value(&registered);
+
+    let rotated = post_refresh(app.clone(), Some(&initial_token)).await;
+    assert_eq!(rotated.status(), StatusCode::OK);
+    let current_token = refresh_cookie_value(&rotated);
+
+    let logout = post_logout(app.clone(), Some(&current_token)).await;
+    assert_eq!(logout.status(), StatusCode::NO_CONTENT);
+    assert!(
+        logout.headers()[header::SET_COOKIE]
+            .to_str()
+            .expect("clearing cookie should be valid text")
+            .contains("Max-Age=0")
+    );
+    assert!(
+        logout.headers()[header::SET_COOKIE]
+            .to_str()
+            .expect("clearing cookie should be valid text")
+            .contains("HttpOnly")
+    );
+    assert!(logout.headers()[header::CACHE_CONTROL] == "no-store");
+    let empty_body = logout
+        .into_body()
+        .collect()
+        .await
+        .expect("collect logout response body")
+        .to_bytes();
+    assert!(empty_body.is_empty());
+
+    let stale_refresh = post_refresh(app.clone(), Some(&current_token)).await;
+    assert_eq!(stale_refresh.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response_json(stale_refresh).await["error"],
+        "invalid refresh token"
+    );
+
+    let initial_hash = sha2::Sha256::digest(initial_token.as_bytes()).to_vec();
+    let client = pool.get().await.expect("get test database connection");
+    let family: uuid::Uuid = client
+        .query_one(
+            "SELECT family FROM refresh_tokens WHERE token_hash = $1",
+            &[&initial_hash],
+        )
+        .await
+        .expect("initial refresh token should remain auditable")
+        .get("family");
+    let active_tokens: i64 = client
+        .query_one(
+            "SELECT count(*) FROM refresh_tokens \
+             WHERE family = $1 AND revoked_at IS NULL",
+            &[&family],
+        )
+        .await
+        .expect("count active family tokens after logout")
+        .get(0);
+    assert_eq!(active_tokens, 0);
+    drop(client);
+    cleanup_user(&pool, &username).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
+async fn logout_without_a_known_refresh_token_is_idempotent() {
+    let (app, _) = test_app();
+
+    let missing = post_logout(app.clone(), None).await;
+    assert_eq!(missing.status(), StatusCode::NO_CONTENT);
+    assert!(
+        missing.headers()[header::SET_COOKIE]
+            .to_str()
+            .expect("clearing cookie should be valid text")
+            .contains("Max-Age=0")
+    );
+
+    let unknown = post_logout(app, Some("unknown-token-value")).await;
+    assert_eq!(unknown.status(), StatusCode::NO_CONTENT);
+    assert!(
+        unknown.headers()[header::SET_COOKIE]
+            .to_str()
+            .expect("clearing cookie should be valid text")
+            .contains("Max-Age=0")
+    );
 }

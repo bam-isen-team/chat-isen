@@ -13,6 +13,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/register", post(crate::auth::handlers::register))
         .route("/auth/login", post(crate::auth::handlers::login))
         .route("/auth/refresh", post(crate::auth::handlers::refresh))
+        .route("/auth/logout", post(crate::auth::handlers::logout))
         .with_state(state)
 }
 

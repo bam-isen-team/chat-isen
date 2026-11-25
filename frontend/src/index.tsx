@@ -11,7 +11,6 @@ export function App() {
 			<main>
 				<Router>
 					<Route path="/" component={Login} />
-					<Route path="/" component={Home} />
 					<Route path="/registration" component={Registration} />
 					<Route default component={NotFound} />
 				</Router>

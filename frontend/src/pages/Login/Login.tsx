@@ -8,7 +8,7 @@ export function Login() {
 			<h1>Welcome to Your Chat App</h1>
 			<section>
 				<Resource
-					title="Log In"
+					title="Login"
 				/>
 			</section>
 			<h4>Not Registered? <a href="/registration">Sign Up</a></h4>

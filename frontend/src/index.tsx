@@ -2,7 +2,6 @@ import { LocationProvider, Router, Route, hydrate, prerender as ssr } from 'prea
 
 import { Login } from './pages/Login/Login.jsx';
 import { NotFound } from './pages/_404.jsx';
-import './style.css';
 import { Registration } from './pages/Registration/Registration.jsx';
 
 export function App() {

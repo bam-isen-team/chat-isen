@@ -1,3 +1,12 @@
+use crate::{
+    auth::{
+        jwt::mint_access_token,
+        password::{hash_password, verify_password},
+        tokens::generate_refresh_token,
+    },
+    error::AppError,
+    state::AppState,
+};
 use axum::{
     Json,
     extract::State,
@@ -5,16 +14,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-
-use crate::{
-    auth::{
-        jwt::mint_access_token,
-        password::{hash_password, verify_password},
-    },
-    error::AppError,
-    state::AppState,
-};
 
 // ---- Field rules ----
 // The username rule MUST mirror the users table CHECK in
@@ -126,20 +125,6 @@ fn is_valid_email(email: &str) -> bool {
     plausible && email.chars().count() <= EMAIL_MAX
 }
 
-fn new_refresh_token() -> (String, Vec<u8>, uuid::Uuid) {
-    // UUID v4 uses the operating system CSPRNG. Three UUIDs provide more
-    // than the 256 bits required by the refresh-token decision in ADR-001.
-    let raw = format!(
-        "{}{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    );
-    let hash = Sha256::digest(raw.as_bytes()).to_vec();
-    let family = uuid::Uuid::new_v4();
-    (raw, hash, family)
-}
-
 fn auth_response(
     status: StatusCode,
     access_token: String,
@@ -212,13 +197,13 @@ pub async fn register(
         i64::from(token_version),
     )?;
 
-    let (refresh_token, refresh_token_hash, family) = new_refresh_token();
+    let refresh_token = generate_refresh_token();
 
     transaction
         .execute(
             "INSERT INTO refresh_tokens (user_id, token_hash, family, expires_at) \
              VALUES ($1, $2, $3, now() + interval '30 days')",
-            &[&user_id, &refresh_token_hash, &family],
+            &[&user_id, &refresh_token.hash, &refresh_token.family],
         )
         .await
         .map_err(|err| {
@@ -240,7 +225,7 @@ pub async fn register(
             email: user.get("email"),
             display_name: user.get("display_name"),
         },
-        &refresh_token,
+        &refresh_token.raw,
     )
 }
 
@@ -285,13 +270,13 @@ pub async fn login(
         &user_id.to_string(),
         i64::from(token_version),
     )?;
-    let (refresh_token, refresh_token_hash, family) = new_refresh_token();
+    let refresh_token = generate_refresh_token();
 
     client
         .execute(
             "INSERT INTO refresh_tokens (user_id, token_hash, family, expires_at) \
              VALUES ($1, $2, $3, now() + interval '30 days')",
-            &[&user_id, &refresh_token_hash, &family],
+            &[&user_id, &refresh_token.hash, &refresh_token.family],
         )
         .await
         .map_err(|err| {
@@ -308,7 +293,7 @@ pub async fn login(
             email: user.get("email"),
             display_name: user.get("display_name"),
         },
-        &refresh_token,
+        &refresh_token.raw,
     )
 }
 

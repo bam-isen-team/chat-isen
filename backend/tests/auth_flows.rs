@@ -462,3 +462,74 @@ async fn refresh_rejects_missing_unknown_and_expired_tokens() {
     drop(client);
     cleanup_user(&pool, &username).await;
 }
+
+#[tokio::test]
+#[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
+async fn concurrent_refresh_reuse_detects_replay_and_revokes_family() {
+    let (app, pool) = test_app();
+    let (username, email) = unique_credentials();
+    let registered = post_register(
+        app.clone(),
+        &username,
+        &email,
+        "correct horse battery staple",
+    )
+    .await;
+    assert_eq!(registered.status(), StatusCode::CREATED);
+    let original_token = refresh_cookie_value(&registered);
+    let original_hash = sha2::Sha256::digest(original_token.as_bytes()).to_vec();
+
+    let client = pool.get().await.expect("get test database connection");
+    let family: uuid::Uuid = client
+        .query_one(
+            "SELECT family FROM refresh_tokens WHERE token_hash = $1",
+            &[&original_hash],
+        )
+        .await
+        .expect("initial refresh token should be stored")
+        .get("family");
+    drop(client);
+
+    let (first, second) = tokio::join!(
+        post_refresh(app.clone(), Some(&original_token)),
+        post_refresh(app.clone(), Some(&original_token)),
+    );
+
+    let (rotated, replay) = match (first.status(), second.status()) {
+        (StatusCode::OK, StatusCode::UNAUTHORIZED) => (first, second),
+        (StatusCode::UNAUTHORIZED, StatusCode::OK) => (second, first),
+        statuses => panic!("expected one rotation and one replay rejection, got {statuses:?}"),
+    };
+    let successor_token = refresh_cookie_value(&rotated);
+    let body = response_json(rotated).await;
+    let access_token = body["access_token"]
+        .as_str()
+        .filter(|token| !token.is_empty())
+        .expect("successful concurrent refresh should return an access token");
+    assert!(verify_access_token(TEST_JWT_SECRET, access_token).is_ok());
+    assert_eq!(
+        response_json(replay).await["error"],
+        "invalid refresh token"
+    );
+
+    let successor_replay = post_refresh(app, Some(&successor_token)).await;
+    assert_eq!(successor_replay.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response_json(successor_replay).await["error"],
+        "invalid refresh token"
+    );
+
+    let client = pool.get().await.expect("get test database connection");
+    let active_tokens: i64 = client
+        .query_one(
+            "SELECT count(*) FROM refresh_tokens \
+             WHERE family = $1 AND revoked_at IS NULL",
+            &[&family],
+        )
+        .await
+        .expect("count active tokens after concurrent replay")
+        .get(0);
+    assert_eq!(active_tokens, 0);
+    drop(client);
+    cleanup_user(&pool, &username).await;
+}

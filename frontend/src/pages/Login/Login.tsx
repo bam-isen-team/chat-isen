@@ -11,7 +11,7 @@ export function Login() {
 					title="Log In"
 				/>
 			</section>
-			<h4>Not Registered? <a href="../Register/register">Sign Up</a></h4>
+			<h4>Not Registered? <a href="/registration">Sign Up</a></h4>
 		</div>
 	);
 }
@@ -24,7 +24,7 @@ function Resource(props) {
 			<input type="text" placeholder="Enter your username" class="input" />
 			<h3 style={{ textAlign: 'left', fontWeight: 'normal', fontSize: '1rem' }}>Password</h3>
 			<input type="password" placeholder="Enter your password" class="input" />
-			<button class="button"><a href="../Register/register.jsx">Log In</a></button>
+			<button class="button"><a href="https://google.com">Log In</a></button>
 		</a>
 	);
 }

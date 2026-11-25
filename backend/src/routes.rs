@@ -1,10 +1,16 @@
-use axum::{Router, extract::State, http::StatusCode, routing::get};
+use axum::{
+    Router,
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+};
 
 use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/auth/register", post(crate::auth::handlers::register))
         .with_state(state)
 }
 

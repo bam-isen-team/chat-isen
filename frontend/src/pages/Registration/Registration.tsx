@@ -1,5 +1,5 @@
 import type { TargetedSubmitEvent } from 'preact';
-import './style.css';
+import './Registration.css';
 
 export function Registration() {
     async function handleSubmit(event: TargetedSubmitEvent<HTMLFormElement>) {

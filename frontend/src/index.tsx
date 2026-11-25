@@ -4,7 +4,7 @@ import { Header } from './components/Header.jsx';
 import { Home } from './pages/Home/index.jsx';
 import { NotFound } from './pages/_404.jsx';
 import './style.css';
-import { Registration } from './pages/Registration/index.js';
+import { Registration } from './pages/Registration/Registration.jsx';
 
 export function App() {
 	return (

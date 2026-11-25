@@ -34,5 +34,10 @@ async fn main() {
     // The only thing this process says out loud: its address, never its secrets.
     tracing::info!("listening on {bind_addr}");
 
-    axum::serve(listener, app).await.expect("server error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .expect("server error");
 }

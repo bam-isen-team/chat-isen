@@ -12,6 +12,7 @@ use backend::{
 use deadpool_postgres::{Manager, Pool};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
+use sha2::Digest;
 use std::{env, sync::Arc};
 use tower::ServiceExt;
 
@@ -28,7 +29,7 @@ fn test_app() -> (Router, Pool) {
     let database_name = pg_config.get_dbname().unwrap_or_default();
     assert!(
         database_name.ends_with("_test"),
-        "refusing to run registration integration tests unless the database name ends in _test"
+        "refusing to run auth integration tests unless the database name ends in _test"
     );
 
     let manager = Manager::new(pg_config, tokio_postgres::NoTls);
@@ -90,6 +91,27 @@ async fn post_login(app: Router, email: &str, password: &str) -> axum::response:
         .expect("login router should respond")
 }
 
+async fn post_refresh(app: Router, token: Option<&str>) -> axum::response::Response {
+    let mut request = Request::builder().method("POST").uri("/auth/refresh");
+    if let Some(token) = token {
+        request = request.header(header::COOKIE, format!("refresh_token={token}"));
+    }
+    app.oneshot(request.body(Body::empty()).expect("build refresh request"))
+        .await
+        .expect("refresh router should respond")
+}
+
+fn refresh_cookie_value(response: &axum::response::Response) -> String {
+    response.headers()[header::SET_COOKIE]
+        .to_str()
+        .expect("Set-Cookie should be valid text")
+        .split(';')
+        .next()
+        .and_then(|pair| pair.strip_prefix("refresh_token="))
+        .expect("Set-Cookie should contain refresh_token")
+        .to_owned()
+}
+
 async fn cleanup_user(pool: &Pool, username: &str) {
     let client = pool.get().await.expect("get cleanup database connection");
     client
@@ -110,7 +132,7 @@ async fn response_json(response: axum::response::Response) -> Value {
 
 // These tests are opt-in because they write to PostgreSQL. Create a dedicated
 // database named with the `_test` suffix, apply the SQL migrations, then run
-// from backend/: TEST_DATABASE_URL=postgres://.../chatisen_test cargo test -- --ignored
+// from backend/: TEST_DATABASE_URL=postgres://.../chatisen_test cargo test --test auth_flows -- --ignored
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn register_persists_hash_and_sets_refresh_cookie() {
@@ -292,5 +314,151 @@ async fn login_uses_the_same_generic_error_for_unknown_email_and_wrong_password(
     assert_eq!(wrong_password_body, unknown_account_body);
     assert_eq!(wrong_password_body["error"], "invalid credentials");
 
+    cleanup_user(&pool, &username).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
+async fn refresh_rotates_token_and_revokes_family_on_replay() {
+    let (app, pool) = test_app();
+    let (username, email) = unique_credentials();
+    let password = "correct horse battery staple";
+
+    let registered = post_register(app.clone(), &username, &email, password).await;
+    assert_eq!(registered.status(), StatusCode::CREATED);
+    let original_token = refresh_cookie_value(&registered);
+
+    let rotated = post_refresh(app.clone(), Some(&original_token)).await;
+    assert_eq!(rotated.status(), StatusCode::OK);
+    assert_eq!(rotated.headers()[header::CACHE_CONTROL], "no-store");
+    let rotated_token = refresh_cookie_value(&rotated);
+    assert_ne!(rotated_token, original_token);
+    let body = response_json(rotated).await;
+    let access_token = body["access_token"]
+        .as_str()
+        .filter(|token| !token.is_empty())
+        .expect("refresh should return an access token");
+    assert!(verify_access_token(TEST_JWT_SECRET, access_token).is_ok());
+    assert_eq!(body["user"]["username"], username);
+
+    let original_hash = sha2::Sha256::digest(original_token.as_bytes()).to_vec();
+    let rotated_hash = sha2::Sha256::digest(rotated_token.as_bytes()).to_vec();
+    let client = pool.get().await.expect("get test database connection");
+    let original = client
+        .query_one(
+            "SELECT id, family, replaced_by, revoked_at IS NOT NULL AS revoked \
+             FROM refresh_tokens WHERE token_hash = $1",
+            &[&original_hash],
+        )
+        .await
+        .expect("old refresh token should remain auditable");
+    let family: uuid::Uuid = original.get("family");
+    let successor_id: Option<uuid::Uuid> = original.get("replaced_by");
+    let original_revoked: bool = original.get("revoked");
+    assert!(original_revoked);
+
+    let successor = client
+        .query_one(
+            "SELECT id, family, revoked_at IS NOT NULL AS revoked \
+             FROM refresh_tokens WHERE token_hash = $1",
+            &[&rotated_hash],
+        )
+        .await
+        .expect("rotated refresh token hash should be stored");
+    let successor_id_from_db: uuid::Uuid = successor.get("id");
+    let successor_family: uuid::Uuid = successor.get("family");
+    let successor_revoked: bool = successor.get("revoked");
+    assert_eq!(successor_id, Some(successor_id_from_db));
+    assert_eq!(successor_family, family);
+    assert!(!successor_revoked);
+
+    let replay = post_refresh(app, Some(&original_token)).await;
+    assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        replay.headers()[header::SET_COOKIE]
+            .to_str()
+            .expect("clearing cookie should be valid text")
+            .contains("Max-Age=0")
+    );
+    assert_eq!(
+        response_json(replay).await["error"],
+        "invalid refresh token"
+    );
+
+    let active_tokens: i64 = client
+        .query_one(
+            "SELECT count(*) FROM refresh_tokens \
+             WHERE family = $1 AND revoked_at IS NULL",
+            &[&family],
+        )
+        .await
+        .expect("count active refresh tokens in revoked family")
+        .get(0);
+    assert_eq!(active_tokens, 0);
+    drop(client);
+    cleanup_user(&pool, &username).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
+async fn refresh_rejects_missing_unknown_and_expired_tokens() {
+    let (app, pool) = test_app();
+    let missing = post_refresh(app.clone(), None).await;
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        missing.headers()[header::SET_COOKIE]
+            .to_str()
+            .expect("clearing cookie should be valid text")
+            .contains("Max-Age=0")
+    );
+
+    let unknown = post_refresh(app.clone(), Some("unknown-token-value")).await;
+    assert_eq!(unknown.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response_json(unknown).await["error"],
+        "invalid refresh token"
+    );
+
+    let (username, email) = unique_credentials();
+    let registered = post_register(
+        app.clone(),
+        &username,
+        &email,
+        "correct horse battery staple",
+    )
+    .await;
+    assert_eq!(registered.status(), StatusCode::CREATED);
+    let token = refresh_cookie_value(&registered);
+    let token_hash = sha2::Sha256::digest(token.as_bytes()).to_vec();
+
+    let client = pool.get().await.expect("get test database connection");
+    client
+        .execute(
+            "UPDATE refresh_tokens \
+             SET created_at = now() - interval '2 days', \
+                 expires_at = now() - interval '1 second' \
+             WHERE token_hash = $1",
+            &[&token_hash],
+        )
+        .await
+        .expect("expire the test refresh token");
+
+    let expired = post_refresh(app, Some(&token)).await;
+    assert_eq!(expired.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response_json(expired).await["error"],
+        "invalid refresh token"
+    );
+
+    let still_unrevoked: bool = client
+        .query_one(
+            "SELECT revoked_at IS NULL FROM refresh_tokens WHERE token_hash = $1",
+            &[&token_hash],
+        )
+        .await
+        .expect("expired token should remain distinguishable from replay")
+        .get(0);
+    assert!(still_unrevoked);
+    drop(client);
     cleanup_user(&pool, &username).await;
 }

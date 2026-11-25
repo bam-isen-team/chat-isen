@@ -2,7 +2,7 @@ use crate::{
     auth::{
         jwt::mint_access_token,
         password::{hash_password, verify_password},
-        tokens::generate_refresh_token,
+        tokens::{generate_refresh_token, hash_refresh_token},
     },
     error::AppError,
     state::AppState,
@@ -10,7 +10,7 @@ use crate::{
 use axum::{
     Json,
     extract::State,
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -123,6 +123,36 @@ fn is_valid_email(email: &str) -> bool {
     });
 
     plausible && email.chars().count() <= EMAIL_MAX
+}
+
+fn refresh_token_from_headers(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|cookies| cookies.split(';'))
+        .find_map(|cookie| {
+            let (name, value) = cookie.trim().split_once('=')?;
+            (name == "refresh_token" && !value.is_empty()).then_some(value)
+        })
+}
+
+fn invalid_refresh_response() -> Response {
+    let mut response = (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "invalid refresh token" })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_static(
+            "refresh_token=; HttpOnly; Secure; SameSite=Lax; Path=/auth/refresh; Max-Age=0",
+        ),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 fn auth_response(
@@ -297,9 +327,142 @@ pub async fn login(
     )
 }
 
+pub async fn refresh(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let Some(raw_token) = refresh_token_from_headers(&headers) else {
+        return Ok(invalid_refresh_response());
+    };
+    let token_hash = hash_refresh_token(raw_token);
+
+    let mut client = state.pool.get().await.map_err(|err| {
+        tracing::error!(cause = %err, "db pool checkout failed during refresh");
+        AppError::Internal
+    })?;
+    let transaction = client.transaction().await.map_err(|err| {
+        tracing::error!(cause = %err, "starting refresh transaction failed");
+        AppError::Internal
+    })?;
+
+    let token = transaction
+        .query_opt(
+            "SELECT rt.id, rt.user_id, rt.family, \
+                    (rt.revoked_at IS NOT NULL OR rt.replaced_by IS NOT NULL) AS is_used, \
+                    (rt.expires_at <= now()) AS is_expired, \
+                    u.token_version, u.username, u.email, u.display_name \
+             FROM refresh_tokens rt \
+             JOIN users u ON u.id = rt.user_id \
+             WHERE rt.token_hash = $1 \
+             FOR UPDATE OF rt",
+            &[&token_hash],
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!(cause = %err, "looking up refresh token failed");
+            AppError::Internal
+        })?;
+
+    let Some(token) = token else {
+        return Ok(invalid_refresh_response());
+    };
+
+    let family: uuid::Uuid = token.get("family");
+    let is_used: bool = token.get("is_used");
+    if is_used {
+        // A consumed token being presented again signals possible theft.
+        // Revoke every still-active token in its family before rejecting it.
+        transaction
+            .execute(
+                "UPDATE refresh_tokens SET revoked_at = now() \
+                 WHERE family = $1 AND revoked_at IS NULL",
+                &[&family],
+            )
+            .await
+            .map_err(|err| {
+                tracing::error!(cause = %err, "revoking replayed refresh-token family failed");
+                AppError::Internal
+            })?;
+        transaction.commit().await.map_err(|err| {
+            tracing::error!(cause = %err, "committing refresh-token replay revocation failed");
+            AppError::Internal
+        })?;
+        return Ok(invalid_refresh_response());
+    }
+
+    let is_expired: bool = token.get("is_expired");
+    if is_expired {
+        return Ok(invalid_refresh_response());
+    }
+
+    let token_id: uuid::Uuid = token.get("id");
+    let user_id: uuid::Uuid = token.get("user_id");
+    let token_version: i32 = token.get("token_version");
+    let access_token = mint_access_token(
+        &state.config.jwt_secret,
+        &user_id.to_string(),
+        i64::from(token_version),
+    )?;
+    let successor = generate_refresh_token();
+    let successor_id: uuid::Uuid = transaction
+        .query_one(
+            "INSERT INTO refresh_tokens (user_id, token_hash, family, expires_at) \
+             VALUES ($1, $2, $3, now() + interval '30 days') \
+             RETURNING id",
+            &[&user_id, &successor.hash, &family],
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!(cause = %err, "inserting rotated refresh token failed");
+            AppError::Internal
+        })?
+        .get("id");
+
+    let updated = transaction
+        .execute(
+            "UPDATE refresh_tokens \
+             SET revoked_at = now(), replaced_by = $2 \
+             WHERE id = $1 AND revoked_at IS NULL AND replaced_by IS NULL \
+                   AND expires_at > now()",
+            &[&token_id, &successor_id],
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!(cause = %err, "marking refresh token as rotated failed");
+            AppError::Internal
+        })?;
+    if updated == 0 {
+        // The row lock makes a concurrent consume impossible; the remaining
+        // expected reason is that the token expired during this request.
+        return Ok(invalid_refresh_response());
+    }
+    if updated != 1 {
+        tracing::error!(token_id = %token_id, "refresh token changed while locked");
+        return Err(AppError::Internal);
+    }
+
+    transaction.commit().await.map_err(|err| {
+        tracing::error!(cause = %err, "committing refresh token rotation failed");
+        AppError::Internal
+    })?;
+
+    auth_response(
+        StatusCode::OK,
+        access_token,
+        AuthenticatedUser {
+            id: user_id,
+            username: token.get("username"),
+            email: token.get("email"),
+            display_name: token.get("display_name"),
+        },
+        &successor.raw,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LoginRequest, PASSWORD_MAX, RegisterRequest};
+    use super::{LoginRequest, PASSWORD_MAX, RegisterRequest, refresh_token_from_headers};
+    use axum::http::{HeaderMap, HeaderValue, header};
     use rstest::{fixture, rstest};
 
     #[fixture]
@@ -380,5 +543,29 @@ mod tests {
         valid_login_request.password = password;
 
         assert!(valid_login_request.validate().is_err());
+    }
+
+    #[rstest]
+    fn finds_refresh_token_among_other_cookies() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("theme=dark; refresh_token=opaque-value; locale=fr"),
+        );
+
+        assert_eq!(refresh_token_from_headers(&headers), Some("opaque-value"));
+    }
+
+    #[rstest]
+    #[case::missing_cookie(None)]
+    #[case::empty_cookie(Some("refresh_token="))]
+    #[case::different_cookie(Some("session=opaque-value"))]
+    fn rejects_missing_refresh_cookie(#[case] cookie: Option<&str>) {
+        let mut headers = HeaderMap::new();
+        if let Some(cookie) = cookie {
+            headers.insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
+        }
+
+        assert_eq!(refresh_token_from_headers(&headers), None);
     }
 }

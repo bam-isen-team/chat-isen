@@ -20,6 +20,11 @@ pub enum AppError {
     #[error("username or email already taken")]
     Conflict,
 
+    /// Login failed without revealing whether the account or password was
+    /// incorrect.
+    #[error("invalid credentials")]
+    Unauthorized,
+
     /// Anything unexpected: 500 with a generic body — the real cause is
     /// logged server-side only (cf. ADR-001: no internal detail in answers).
     #[error("internal server error")]
@@ -35,6 +40,7 @@ impl IntoResponse for AppError {
         let (status, message): (StatusCode, String) = match &self {
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Conflict => (StatusCode::CONFLICT, self.to_string()),
+            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 
@@ -50,7 +56,7 @@ impl IntoResponse for AppError {
 
 impl From<PasswordError> for AppError {
     fn from(err: PasswordError) -> Self {
-        tracing::error!(cause = %err, "password hashing failed");
+        tracing::error!(cause = %err, "password hashing or verification failed");
         AppError::Internal
     }
 }

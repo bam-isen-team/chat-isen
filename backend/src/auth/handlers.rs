@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    auth::{jwt::mint_access_token, password::hash_password},
+    auth::{
+        jwt::mint_access_token,
+        password::{hash_password, verify_password},
+    },
     error::AppError,
     state::AppState,
 };
@@ -36,14 +39,20 @@ pub struct RegisterRequest {
     password: String,
 }
 
-#[derive(Serialize)]
-struct RegisterResponse {
-    access_token: String,
-    user: RegisteredUser,
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    email: String,
+    password: String,
 }
 
 #[derive(Serialize)]
-struct RegisteredUser {
+struct AuthResponse {
+    access_token: String,
+    user: AuthenticatedUser,
+}
+
+#[derive(Serialize)]
+struct AuthenticatedUser {
     id: uuid::Uuid,
     username: String,
     email: String,
@@ -68,13 +77,7 @@ impl RegisterRequest {
             )));
         }
 
-        let email_is_plausible = self.email.split_once('@').is_some_and(|(local, domain)| {
-            !local.is_empty()
-                && !domain.is_empty()
-                && !domain.contains('@')
-                && !self.email.chars().any(char::is_whitespace)
-        });
-        if !email_is_plausible || self.email.chars().count() > EMAIL_MAX {
+        if !is_valid_email(&self.email) {
             return Err(AppError::Validation(
                 "email must have a local part and domain, contain no spaces, and be at most 254 chars"
                     .to_string(),
@@ -90,6 +93,74 @@ impl RegisterRequest {
 
         Ok(())
     }
+}
+
+impl LoginRequest {
+    fn validate(&self) -> Result<(), AppError> {
+        if !is_valid_email(&self.email) {
+            return Err(AppError::Validation(
+                "email must have a local part and domain, contain no spaces, and be at most 254 chars"
+                    .to_string(),
+            ));
+        }
+
+        let password_len = self.password.chars().count();
+        if !(1..=PASSWORD_MAX).contains(&password_len) {
+            return Err(AppError::Validation(format!(
+                "password must be 1..{PASSWORD_MAX} chars"
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+fn is_valid_email(email: &str) -> bool {
+    let plausible = email.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty()
+            && !domain.is_empty()
+            && !domain.contains('@')
+            && !email.chars().any(char::is_whitespace)
+    });
+
+    plausible && email.chars().count() <= EMAIL_MAX
+}
+
+fn new_refresh_token() -> (String, Vec<u8>, uuid::Uuid) {
+    // UUID v4 uses the operating system CSPRNG. Three UUIDs provide more
+    // than the 256 bits required by the refresh-token decision in ADR-001.
+    let raw = format!(
+        "{}{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let hash = Sha256::digest(raw.as_bytes()).to_vec();
+    let family = uuid::Uuid::new_v4();
+    (raw, hash, family)
+}
+
+fn auth_response(
+    status: StatusCode,
+    access_token: String,
+    user: AuthenticatedUser,
+    refresh_token: &str,
+) -> Result<Response, AppError> {
+    let cookie = format!(
+        "refresh_token={refresh_token}; HttpOnly; Secure; SameSite=Lax; Path=/auth/refresh; Max-Age={REFRESH_TOKEN_TTL_SECONDS}"
+    );
+    let cookie = HeaderValue::from_str(&cookie).map_err(|err| {
+        tracing::error!(cause = %err, "building refresh-token cookie failed");
+        AppError::Internal
+    })?;
+
+    let mut response = (status, Json(AuthResponse { access_token, user })).into_response();
+    response.headers_mut().insert(header::SET_COOKIE, cookie);
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+
+    Ok(response)
 }
 
 pub async fn register(
@@ -141,16 +212,7 @@ pub async fn register(
         i64::from(token_version),
     )?;
 
-    // UUID v4 uses the operating system CSPRNG. Three UUIDs provide more
-    // than the 256 bits required by the refresh-token decision in ADR-001.
-    let refresh_token = format!(
-        "{}{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    );
-    let refresh_token_hash = Sha256::digest(refresh_token.as_bytes()).to_vec();
-    let family = uuid::Uuid::new_v4();
+    let (refresh_token, refresh_token_hash, family) = new_refresh_token();
 
     transaction
         .execute(
@@ -169,44 +231,104 @@ pub async fn register(
         AppError::Internal
     })?;
 
-    let cookie = format!(
-        "refresh_token={refresh_token}; HttpOnly; Secure; SameSite=Lax; Path=/auth/refresh; Max-Age={REFRESH_TOKEN_TTL_SECONDS}"
-    );
-    let cookie = HeaderValue::from_str(&cookie).map_err(|err| {
-        tracing::error!(cause = %err, "building refresh-token cookie failed");
+    auth_response(
+        StatusCode::CREATED,
+        access_token,
+        AuthenticatedUser {
+            id: user_id,
+            username: user.get("username"),
+            email: user.get("email"),
+            display_name: user.get("display_name"),
+        },
+        &refresh_token,
+    )
+}
+
+pub async fn login(
+    State(state): State<AppState>,
+    Json(req): Json<LoginRequest>,
+) -> Result<Response, AppError> {
+    req.validate()?;
+
+    let client = state.pool.get().await.map_err(|err| {
+        tracing::error!(cause = %err, "db pool checkout failed during login");
         AppError::Internal
     })?;
+    let user = client
+        .query_opt(
+            "SELECT id, token_version, username, email, display_name, password_hash \
+             FROM users WHERE lower(email) = lower($1)",
+            &[&req.email],
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!(cause = %err, "looking up login account failed");
+            AppError::Internal
+        })?;
 
-    let mut response = (
-        StatusCode::CREATED,
-        Json(RegisterResponse {
-            access_token,
-            user: RegisteredUser {
-                id: user_id,
-                username: user.get("username"),
-                email: user.get("email"),
-                display_name: user.get("display_name"),
-            },
-        }),
+    let Some(user) = user else {
+        // Pay the same Argon2 cost for an unknown email as for a known one,
+        // reducing the timing signal that could reveal registered accounts.
+        hash_password(&req.password)?;
+        return Err(AppError::Unauthorized);
+    };
+
+    let password_hash: String = user.get("password_hash");
+    if !verify_password(&req.password, &password_hash)? {
+        return Err(AppError::Unauthorized);
+    }
+
+    let user_id: uuid::Uuid = user.get("id");
+    let token_version: i32 = user.get("token_version");
+    let access_token = mint_access_token(
+        &state.config.jwt_secret,
+        &user_id.to_string(),
+        i64::from(token_version),
+    )?;
+    let (refresh_token, refresh_token_hash, family) = new_refresh_token();
+
+    client
+        .execute(
+            "INSERT INTO refresh_tokens (user_id, token_hash, family, expires_at) \
+             VALUES ($1, $2, $3, now() + interval '30 days')",
+            &[&user_id, &refresh_token_hash, &family],
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!(cause = %err, "creating login refresh token failed");
+            AppError::Internal
+        })?;
+
+    auth_response(
+        StatusCode::OK,
+        access_token,
+        AuthenticatedUser {
+            id: user_id,
+            username: user.get("username"),
+            email: user.get("email"),
+            display_name: user.get("display_name"),
+        },
+        &refresh_token,
     )
-        .into_response();
-    response.headers_mut().insert(header::SET_COOKIE, cookie);
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-
-    Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PASSWORD_MAX, RegisterRequest};
+    use super::{LoginRequest, PASSWORD_MAX, RegisterRequest};
     use rstest::{fixture, rstest};
 
     #[fixture]
     fn valid_request() -> RegisterRequest {
         RegisterRequest {
             username: "alex.dev-1".to_owned(),
+            email: "alex@example.test".to_owned(),
+            password: "correct horse battery staple".to_owned(),
+        }
+    }
+
+    #[fixture]
+    fn valid_login_request() -> LoginRequest {
+        LoginRequest {
             email: "alex@example.test".to_owned(),
             password: "correct horse battery staple".to_owned(),
         }
@@ -251,5 +373,27 @@ mod tests {
         valid_request.password = password;
 
         assert!(valid_request.validate().is_err());
+    }
+
+    #[rstest]
+    #[case::missing_local_part("@example.test")]
+    #[case::missing_domain("alex@")]
+    #[case::multiple_separators("alex@@example.test")]
+    fn login_rejects_malformed_emails(mut valid_login_request: LoginRequest, #[case] email: &str) {
+        valid_login_request.email = email.to_owned();
+
+        assert!(valid_login_request.validate().is_err());
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::too_long("x".repeat(PASSWORD_MAX + 1))]
+    fn login_rejects_empty_or_excessively_long_passwords(
+        mut valid_login_request: LoginRequest,
+        #[case] password: String,
+    ) {
+        valid_login_request.password = password;
+
+        assert!(valid_login_request.validate().is_err());
     }
 }

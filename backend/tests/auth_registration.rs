@@ -73,6 +73,23 @@ async fn post_register(
         .expect("registration router should respond")
 }
 
+async fn post_login(app: Router, email: &str, password: &str) -> axum::response::Response {
+    let body = json!({
+        "email": email,
+        "password": password,
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("build login request");
+
+    app.oneshot(request)
+        .await
+        .expect("login router should respond")
+}
+
 async fn cleanup_user(pool: &Pool, username: &str) {
     let client = pool.get().await.expect("get cleanup database connection");
     client
@@ -205,4 +222,75 @@ async fn register_returns_bad_request_for_invalid_input() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(response_json(response).await["error"].is_string());
+}
+
+#[tokio::test]
+#[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
+async fn login_accepts_valid_credentials_and_issues_a_new_token_pair() {
+    let (app, pool) = test_app();
+    let (username, email) = unique_credentials();
+    let password = "correct horse battery staple";
+
+    let registered = post_register(app.clone(), &username, &email, password).await;
+    assert_eq!(registered.status(), StatusCode::CREATED);
+
+    let response = post_login(app, &email.to_uppercase(), password).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    let set_cookie = response.headers()[header::SET_COOKIE]
+        .to_str()
+        .expect("Set-Cookie should be valid text");
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("Secure"));
+    assert!(set_cookie.contains("SameSite=Lax"));
+    assert!(set_cookie.contains("Path=/auth/refresh"));
+
+    let body = response_json(response).await;
+    let access_token = body["access_token"]
+        .as_str()
+        .filter(|token| !token.is_empty())
+        .expect("response should contain an access token");
+    assert!(verify_access_token(TEST_JWT_SECRET, access_token).is_ok());
+    assert_eq!(body["user"]["username"], username);
+
+    let client = pool.get().await.expect("get test database connection");
+    let refresh_count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM refresh_tokens r \
+             JOIN users u ON u.id = r.user_id WHERE u.username = $1",
+            &[&username],
+        )
+        .await
+        .expect("login should persist another refresh token")
+        .get(0);
+    assert_eq!(refresh_count, 2);
+    drop(client);
+    cleanup_user(&pool, &username).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
+async fn login_uses_the_same_generic_error_for_unknown_email_and_wrong_password() {
+    let (app, pool) = test_app();
+    let (username, email) = unique_credentials();
+    let password = "correct horse battery staple";
+
+    let registered = post_register(app.clone(), &username, &email, password).await;
+    assert_eq!(registered.status(), StatusCode::CREATED);
+
+    let wrong_password = post_login(app.clone(), &email, "not the correct password").await;
+    let wrong_password_status = wrong_password.status();
+    let wrong_password_body = response_json(wrong_password).await;
+
+    let (_, unknown_email) = unique_credentials();
+    let unknown_account = post_login(app, &unknown_email, password).await;
+    let unknown_account_status = unknown_account.status();
+    let unknown_account_body = response_json(unknown_account).await;
+
+    assert_eq!(wrong_password_status, StatusCode::UNAUTHORIZED);
+    assert_eq!(unknown_account_status, StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong_password_body, unknown_account_body);
+    assert_eq!(wrong_password_body["error"], "invalid credentials");
+
+    cleanup_user(&pool, &username).await;
 }

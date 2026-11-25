@@ -27,6 +27,16 @@ pub struct AccessClaims {
     ver: i64,
 }
 
+impl AccessClaims {
+    pub(crate) fn subject(&self) -> &str {
+        &self.sub
+    }
+
+    pub(crate) fn token_version(&self) -> i64 {
+        self.ver
+    }
+}
+
 /// Failures raised while minting or verifying access tokens.
 #[derive(Debug, thiserror::Error)]
 pub enum JwtError {

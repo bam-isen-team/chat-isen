@@ -1,5 +1,6 @@
 use crate::{
     auth::{
+        identity::AuthIdentity,
         jwt::mint_access_token,
         password::{hash_password, verify_password},
         tokens::{generate_refresh_token, hash_refresh_token},
@@ -519,6 +520,52 @@ pub async fn logout(
     })?;
 
     Ok(logout_response())
+}
+
+#[derive(Serialize)]
+pub(crate) struct CurrentUserResponse {
+    id: uuid::Uuid,
+    username: String,
+    email: String,
+    display_name: String,
+}
+
+/// Return the current user's profile after verifying their bearer access token.
+pub(crate) async fn me(
+    State(state): State<AppState>,
+    AuthIdentity {
+        user_id,
+        token_version,
+    }: AuthIdentity,
+) -> Result<Json<CurrentUserResponse>, AppError> {
+    let client = state.pool.get().await.map_err(|err| {
+        tracing::error!(cause = %err, "db pool checkout failed while loading current user");
+        AppError::Internal
+    })?;
+    let user = client
+        .query_opt(
+            "SELECT id, token_version, username, email, display_name \
+             FROM users WHERE id = $1",
+            &[&user_id],
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!(cause = %err, "loading current user failed");
+            AppError::Internal
+        })?
+        .ok_or(AppError::Unauthenticated)?;
+
+    let current_token_version: i32 = user.get("token_version");
+    if i64::from(current_token_version) != token_version {
+        return Err(AppError::Unauthenticated);
+    }
+
+    Ok(Json(CurrentUserResponse {
+        id: user.get("id"),
+        username: user.get("username"),
+        email: user.get("email"),
+        display_name: user.get("display_name"),
+    }))
 }
 
 #[cfg(test)]

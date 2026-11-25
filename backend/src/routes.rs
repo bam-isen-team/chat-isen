@@ -14,6 +14,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/register", post(crate::auth::handlers::register))
         .route("/auth/login", post(crate::auth::handlers::login))
         .route("/auth/refresh", post(crate::auth::handlers::refresh))
+        .route("/auth/me", get(crate::auth::handlers::me))
         .layer(middleware::from_fn_with_state(
             AuthRateLimiter::default(),
             limit_auth_requests,

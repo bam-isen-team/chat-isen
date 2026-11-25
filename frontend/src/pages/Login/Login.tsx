@@ -1,5 +1,5 @@
 import Logo from '../../assets/chat_icon.png';
-import './style.css';
+import './Login.css';
 
 export function Login() {
 	return (
@@ -24,7 +24,7 @@ function Resource(props) {
 			<input type="text" placeholder="Enter your username" class="input" />
 			<h3 style={{ textAlign: 'left', fontWeight: 'normal', fontSize: '1rem' }}>Password</h3>
 			<input type="password" placeholder="Enter your password" class="input" />
-			<button class="button"><a href="https://google.com">Log In</a></button>
+			<button class="button"><a href="../Register/register.jsx">Log In</a></button>
 		</a>
 	);
 }

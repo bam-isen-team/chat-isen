@@ -1,6 +1,6 @@
 import { LocationProvider, Router, Route, hydrate, prerender as ssr } from 'preact-iso';
 
-import { Login } from './pages/Login/index.js';
+import { Login } from './pages/Login/Login.jsx';
 import { NotFound } from './pages/_404.jsx';
 import './style.css';
 

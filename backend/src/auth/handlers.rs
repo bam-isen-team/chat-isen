@@ -36,6 +36,20 @@ pub struct RegisterRequest {
     password: String,
 }
 
+#[derive(Serialize)]
+struct RegisterResponse {
+    access_token: String,
+    user: RegisteredUser,
+}
+
+#[derive(Serialize)]
+struct RegisteredUser {
+    id: uuid::Uuid,
+    username: String,
+    email: String,
+    display_name: String,
+}
+
 impl RegisterRequest {
     /// Semantic validation, field-precise — register MAY say which field is
     /// wrong (the generic-error rule of ADR-001 applies to login, not here).
@@ -184,16 +198,58 @@ pub async fn register(
     Ok(response)
 }
 
-#[derive(Serialize)]
-struct RegisterResponse {
-    access_token: String,
-    user: RegisteredUser,
-}
+#[cfg(test)]
+mod tests {
+    use super::{PASSWORD_MAX, RegisterRequest};
+    use rstest::{fixture, rstest};
 
-#[derive(Serialize)]
-struct RegisteredUser {
-    id: uuid::Uuid,
-    username: String,
-    email: String,
-    display_name: String,
+    #[fixture]
+    fn valid_request() -> RegisterRequest {
+        RegisterRequest {
+            username: "alex.dev-1".to_owned(),
+            email: "alex@example.test".to_owned(),
+            password: "correct horse battery staple".to_owned(),
+        }
+    }
+
+    #[rstest]
+    fn accepts_a_valid_registration_payload(valid_request: RegisterRequest) {
+        assert!(valid_request.validate().is_ok());
+    }
+
+    #[rstest]
+    #[case::too_short("ab")]
+    #[case::contains_space("contains space")]
+    #[case::contains_slash("a/b")]
+    fn rejects_usernames_outside_the_schema_rules(
+        mut valid_request: RegisterRequest,
+        #[case] username: &str,
+    ) {
+        valid_request.username = username.to_owned();
+
+        assert!(valid_request.validate().is_err());
+    }
+
+    #[rstest]
+    #[case::missing_local_part("@example.test")]
+    #[case::missing_domain("alex@")]
+    #[case::multiple_separators("alex@@example.test")]
+    #[case::contains_space("alex @example.test")]
+    fn rejects_malformed_email_shapes(mut valid_request: RegisterRequest, #[case] email: &str) {
+        valid_request.email = email.to_owned();
+
+        assert!(valid_request.validate().is_err());
+    }
+
+    #[rstest]
+    #[case::too_short("short".to_owned())]
+    #[case::too_long("x".repeat(PASSWORD_MAX + 1))]
+    fn rejects_passwords_outside_the_policy_bounds(
+        mut valid_request: RegisterRequest,
+        #[case] password: String,
+    ) {
+        valid_request.password = password;
+
+        assert!(valid_request.validate().is_err());
+    }
 }

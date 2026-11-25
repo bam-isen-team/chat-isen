@@ -1,8 +1,4 @@
-mod auth;
-mod config;
-mod error;
-mod routes;
-mod state;
+use backend::{config, routes, state};
 
 #[tokio::main]
 async fn main() {
@@ -18,9 +14,8 @@ async fn main() {
         config::Config::from_env().expect("invalid configuration: check .env / .env.example");
 
     // Init the PostgreSQL pool
-    let pg_config: tokio_postgres::Config = config
-        .database_url
-        .parse()
+    let pg_config = config
+        .database_config()
         .expect("invalid DATABASE_URL: expected postgres://user:password@host:port/db");
     let manager = deadpool_postgres::Manager::new(pg_config, tokio_postgres::NoTls);
     let pool = deadpool_postgres::Pool::builder(manager)
@@ -28,7 +23,7 @@ async fn main() {
         .build()
         .expect("failed to build the database pool");
 
-    let bind_addr = config.bind_addr;
+    let bind_addr = config.bind_addr();
     let app_state = state::AppState::new(pool, std::sync::Arc::new(config));
 
     let app = routes::build_router(app_state);

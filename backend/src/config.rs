@@ -22,4 +22,12 @@ impl Config {
             std::env::var("BACKEND_BIND_ADDR")?.parse()?,
         ))
     }
+
+    pub fn database_config(&self) -> Result<tokio_postgres::Config, tokio_postgres::Error> {
+        self.database_url.parse()
+    }
+
+    pub fn bind_addr(&self) -> SocketAddr {
+        self.bind_addr
+    }
 }

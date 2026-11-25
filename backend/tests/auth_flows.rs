@@ -1,3 +1,9 @@
+//! PostgreSQL-backed tests for registration, login, refresh, and logout flows.
+//!
+//! These tests are ignored by default because they write to a dedicated test
+//! database. Set `TEST_DATABASE_URL` to a database ending in `_test`, apply the
+//! migrations, then run `cargo test --test auth_flows -- --ignored`.
+
 use axum::{
     Router,
     body::Body,
@@ -19,6 +25,7 @@ use tower::ServiceExt;
 // Test-only key. Never reuse this value outside the test suite.
 const TEST_JWT_SECRET: &str = "Y2hhdC1pc2VuLXRlc3Qtc2VjcmV0";
 
+/// Build the application and pool against the dedicated PostgreSQL test database.
 fn test_app() -> (Router, Pool) {
     dotenvy::dotenv().ok();
     let database_url = env::var("TEST_DATABASE_URL")
@@ -44,6 +51,7 @@ fn test_app() -> (Router, Pool) {
     (app, pool)
 }
 
+/// Generate credentials unlikely to collide with another test run.
 fn unique_credentials() -> (String, String) {
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let username = format!("t{}", &suffix[..31]);
@@ -51,6 +59,7 @@ fn unique_credentials() -> (String, String) {
     (username, email)
 }
 
+/// Send a JSON registration request through the application router.
 async fn post_register(
     app: Router,
     username: &str,
@@ -74,6 +83,7 @@ async fn post_register(
         .expect("registration router should respond")
 }
 
+/// Send a JSON login request through the application router.
 async fn post_login(app: Router, email: &str, password: &str) -> axum::response::Response {
     let body = json!({
         "email": email,
@@ -91,6 +101,7 @@ async fn post_login(app: Router, email: &str, password: &str) -> axum::response:
         .expect("login router should respond")
 }
 
+/// Send a refresh request, optionally attaching a refresh-token cookie.
 async fn post_refresh(app: Router, token: Option<&str>) -> axum::response::Response {
     let mut request = Request::builder().method("POST").uri("/auth/refresh");
     if let Some(token) = token {
@@ -101,6 +112,7 @@ async fn post_refresh(app: Router, token: Option<&str>) -> axum::response::Respo
         .expect("refresh router should respond")
 }
 
+/// Send a logout request, optionally attaching a refresh-token cookie.
 async fn post_logout(app: Router, token: Option<&str>) -> axum::response::Response {
     let mut request = Request::builder().method("POST").uri("/auth/logout");
     if let Some(token) = token {
@@ -111,6 +123,7 @@ async fn post_logout(app: Router, token: Option<&str>) -> axum::response::Respon
         .expect("logout router should respond")
 }
 
+/// Extract the raw refresh-token value from a response's Set-Cookie header.
 fn refresh_cookie_value(response: &axum::response::Response) -> String {
     response.headers()[header::SET_COOKIE]
         .to_str()
@@ -122,6 +135,7 @@ fn refresh_cookie_value(response: &axum::response::Response) -> String {
         .to_owned()
 }
 
+/// Delete a test account and rely on the schema cascade to remove its tokens.
 async fn cleanup_user(pool: &Pool, username: &str) {
     let client = pool.get().await.expect("get cleanup database connection");
     client
@@ -130,6 +144,7 @@ async fn cleanup_user(pool: &Pool, username: &str) {
         .expect("delete test user and cascading refresh tokens");
 }
 
+/// Collect a response body and deserialize its JSON value.
 async fn response_json(response: axum::response::Response) -> Value {
     let body = response
         .into_body()
@@ -140,9 +155,7 @@ async fn response_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&body).expect("response should be valid JSON")
 }
 
-// These tests are opt-in because they write to PostgreSQL. Create a dedicated
-// database named with the `_test` suffix, apply the SQL migrations, then run
-// from backend/: TEST_DATABASE_URL=postgres://.../chatisen_test cargo test --test auth_flows -- --ignored
+/// Persist the password hash and issue the initial access and refresh tokens.
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn register_persists_hash_and_sets_refresh_cookie() {
@@ -209,6 +222,7 @@ async fn register_persists_hash_and_sets_refresh_cookie() {
     cleanup_user(&pool, &username).await;
 }
 
+/// Reject duplicate account identifiers with a generic conflict response.
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn register_returns_conflict_for_duplicate_email_or_username() {
@@ -238,6 +252,7 @@ async fn register_returns_conflict_for_duplicate_email_or_username() {
     cleanup_user(&pool, &username).await;
 }
 
+/// Return a client error for a registration payload that violates policy.
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn register_returns_bad_request_for_invalid_input() {
@@ -256,6 +271,7 @@ async fn register_returns_bad_request_for_invalid_input() {
     assert!(response_json(response).await["error"].is_string());
 }
 
+/// Accept valid credentials and issue a fresh token pair.
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn login_accepts_valid_credentials_and_issues_a_new_token_pair() {
@@ -300,6 +316,7 @@ async fn login_accepts_valid_credentials_and_issues_a_new_token_pair() {
     cleanup_user(&pool, &username).await;
 }
 
+/// Keep unknown-email and wrong-password failures indistinguishable.
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn login_uses_the_same_generic_error_for_unknown_email_and_wrong_password() {
@@ -327,6 +344,7 @@ async fn login_uses_the_same_generic_error_for_unknown_email_and_wrong_password(
     cleanup_user(&pool, &username).await;
 }
 
+/// Rotate a refresh token and revoke the family when the old token is replayed.
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn refresh_rotates_token_and_revokes_family_on_replay() {
@@ -409,6 +427,7 @@ async fn refresh_rotates_token_and_revokes_family_on_replay() {
     cleanup_user(&pool, &username).await;
 }
 
+/// Reject absent, unknown, and expired refresh tokens.
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn refresh_rejects_missing_unknown_and_expired_tokens() {
@@ -473,6 +492,7 @@ async fn refresh_rejects_missing_unknown_and_expired_tokens() {
     cleanup_user(&pool, &username).await;
 }
 
+/// Serialize concurrent refreshes so a replay revokes the rotated family.
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn concurrent_refresh_reuse_detects_replay_and_revokes_family() {
@@ -544,6 +564,7 @@ async fn concurrent_refresh_reuse_detects_replay_and_revokes_family() {
     cleanup_user(&pool, &username).await;
 }
 
+/// Revoke the full refresh-token family and clear the browser cookie on logout.
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn logout_revokes_refresh_token_family_and_clears_cookie() {
@@ -617,6 +638,7 @@ async fn logout_revokes_refresh_token_family_and_clears_cookie() {
     cleanup_user(&pool, &username).await;
 }
 
+/// Treat logout without a usable refresh cookie as an idempotent success.
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL test database; see test module comment"]
 async fn logout_without_a_known_refresh_token_is_idempotent() {

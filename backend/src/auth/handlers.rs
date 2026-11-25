@@ -34,28 +34,42 @@ const REFRESH_TOKEN_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 /// register handler.
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
+    /// Unique public username, constrained to the users table's allowed format.
     username: String,
+    /// Account email address; uniqueness is enforced by the database.
     email: String,
+    /// Plaintext password, hashed before it is persisted.
     password: String,
 }
 
+/// Login payload accepted by the JSON extractor.
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
+    /// Email address associated with the account.
     email: String,
+    /// Plaintext candidate checked against the stored Argon2id hash.
     password: String,
 }
 
+/// JSON body returned after account creation, login, or token refresh.
 #[derive(Serialize)]
 struct AuthResponse {
+    /// Short-lived bearer access token.
     access_token: String,
-    user: AuthenticatedUser,
+    /// Public account fields for the authenticated user.
+    user: UserResponse,
 }
 
+/// Public account fields returned by token-issuing and current-user endpoints.
 #[derive(Serialize)]
-struct AuthenticatedUser {
+pub(crate) struct UserResponse {
+    /// Stable user identifier.
     id: uuid::Uuid,
+    /// Public username.
     username: String,
+    /// Account email address.
     email: String,
+    /// Display name shown in the client.
     display_name: String,
 }
 
@@ -64,6 +78,9 @@ impl RegisterRequest {
     /// wrong (the generic-error rule of ADR-001 applies to login, not here).
     /// Called BEFORE hashing: argon2 costs ~40 ms, never paid for a payload
     /// that would die at the database CHECK anyway.
+    ///
+    /// # Errors
+    /// Returns a field-specific validation error when any value violates policy.
     pub fn validate(&self) -> Result<(), AppError> {
         let username_len = self.username.chars().count();
         if !(USERNAME_MIN..=USERNAME_MAX).contains(&username_len)
@@ -96,6 +113,10 @@ impl RegisterRequest {
 }
 
 impl LoginRequest {
+    /// Validate the email shape and bound password length before database work.
+    ///
+    /// # Errors
+    /// Returns a validation error for malformed email or password input.
     fn validate(&self) -> Result<(), AppError> {
         if !is_valid_email(&self.email) {
             return Err(AppError::Validation(
@@ -115,6 +136,7 @@ impl LoginRequest {
     }
 }
 
+/// Apply the project's pragmatic email shape and maximum-length checks.
 fn is_valid_email(email: &str) -> bool {
     let plausible = email.split_once('@').is_some_and(|(local, domain)| {
         !local.is_empty()
@@ -126,6 +148,7 @@ fn is_valid_email(email: &str) -> bool {
     plausible && email.chars().count() <= EMAIL_MAX
 }
 
+/// Find a non-empty `refresh_token` cookie among all Cookie header values.
 fn refresh_token_from_headers(headers: &HeaderMap) -> Option<&str> {
     headers
         .get_all(header::COOKIE)
@@ -138,6 +161,7 @@ fn refresh_token_from_headers(headers: &HeaderMap) -> Option<&str> {
         })
 }
 
+/// Return the generic refresh-token rejection and expire the client cookie.
 fn invalid_refresh_response() -> Response {
     let mut response = (
         StatusCode::UNAUTHORIZED,
@@ -148,12 +172,14 @@ fn invalid_refresh_response() -> Response {
     response
 }
 
+/// Return logout's idempotent success response and expire the client cookie.
 fn logout_response() -> Response {
     let mut response = StatusCode::NO_CONTENT.into_response();
     clear_refresh_cookie(&mut response);
     response
 }
 
+/// Add the cookie-clearing and no-store headers to an authentication response.
 fn clear_refresh_cookie(response: &mut Response) {
     response.headers_mut().insert(
         header::SET_COOKIE,
@@ -166,12 +192,18 @@ fn clear_refresh_cookie(response: &mut Response) {
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
 }
 
+/// Serialize the access token and attach the refresh-token cookie.
+///
+/// # Errors
+/// Returns an internal error if the cookie cannot be represented as an HTTP header.
 fn auth_response(
     status: StatusCode,
     access_token: String,
-    user: AuthenticatedUser,
+    user: UserResponse,
     refresh_token: &str,
 ) -> Result<Response, AppError> {
+    // The refresh token is only sent as an HttpOnly cookie; the access token
+    // remains in the JSON body for the client to keep in memory.
     let cookie = format!(
         "refresh_token={refresh_token}; HttpOnly; Secure; SameSite=Lax; Path=/auth/refresh; Max-Age={REFRESH_TOKEN_TTL_SECONDS}"
     );
@@ -189,6 +221,10 @@ fn auth_response(
     Ok(response)
 }
 
+/// Create an account, hash its password, and issue its initial token pair.
+///
+/// # Errors
+/// Returns a validation error, a generic conflict response, or an internal error.
 pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
@@ -200,6 +236,7 @@ pub async fn register(
         tracing::error!(cause = %err, "db pool checkout failed");
         AppError::Internal
     })?;
+    // User creation and initial refresh-token storage must commit together.
     let transaction = client.transaction().await.map_err(|err| {
         tracing::error!(cause = %err, "starting registration transaction failed");
         AppError::Internal
@@ -260,7 +297,7 @@ pub async fn register(
     auth_response(
         StatusCode::CREATED,
         access_token,
-        AuthenticatedUser {
+        UserResponse {
             id: user_id,
             username: user.get("username"),
             email: user.get("email"),
@@ -270,6 +307,10 @@ pub async fn register(
     )
 }
 
+/// Verify credentials and issue a new access/refresh token pair.
+///
+/// # Errors
+/// Returns a validation error, generic invalid-credentials response, or internal error.
 pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
@@ -328,7 +369,7 @@ pub async fn login(
     auth_response(
         StatusCode::OK,
         access_token,
-        AuthenticatedUser {
+        UserResponse {
             id: user_id,
             username: user.get("username"),
             email: user.get("email"),
@@ -338,6 +379,12 @@ pub async fn login(
     )
 }
 
+/// Rotate a valid refresh token and return a new access/refresh pair.
+///
+/// Reuse of an already consumed token revokes the full token family.
+///
+/// # Errors
+/// Returns an internal error when a database operation or token signing fails.
 pub async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -356,6 +403,8 @@ pub async fn refresh(
         AppError::Internal
     })?;
 
+    // Lock the presented token row so simultaneous refreshes cannot both
+    // rotate it successfully.
     let token = transaction
         .query_opt(
             "SELECT rt.id, rt.user_id, rt.family, \
@@ -460,7 +509,7 @@ pub async fn refresh(
     auth_response(
         StatusCode::OK,
         access_token,
-        AuthenticatedUser {
+        UserResponse {
             id: user_id,
             username: token.get("username"),
             email: token.get("email"),
@@ -470,6 +519,12 @@ pub async fn refresh(
     )
 }
 
+/// Revoke the presented refresh-token family and clear the browser cookie.
+///
+/// Missing or unknown cookies are handled as successful, idempotent logout.
+///
+/// # Errors
+/// Returns an internal error if the database cannot complete revocation.
 pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -488,6 +543,7 @@ pub async fn logout(
         AppError::Internal
     })?;
 
+    // Lock the presented token before revoking its full family.
     let token = transaction
         .query_opt(
             "SELECT family FROM refresh_tokens WHERE token_hash = $1 FOR UPDATE",
@@ -522,22 +578,21 @@ pub async fn logout(
     Ok(logout_response())
 }
 
-#[derive(Serialize)]
-pub(crate) struct CurrentUserResponse {
-    id: uuid::Uuid,
-    username: String,
-    email: String,
-    display_name: String,
-}
-
 /// Return the current user's profile after verifying their bearer access token.
+///
+/// The database lookup also checks the token version, so a globally revoked
+/// token cannot continue to read the profile until its expiry.
+///
+/// # Errors
+/// Returns `401` for a deleted user or stale token version, and `500` when the
+/// profile cannot be loaded because of a server-side failure.
 pub(crate) async fn me(
     State(state): State<AppState>,
     AuthIdentity {
         user_id,
         token_version,
     }: AuthIdentity,
-) -> Result<Json<CurrentUserResponse>, AppError> {
+) -> Result<Json<UserResponse>, AppError> {
     let client = state.pool.get().await.map_err(|err| {
         tracing::error!(cause = %err, "db pool checkout failed while loading current user");
         AppError::Internal
@@ -555,12 +610,14 @@ pub(crate) async fn me(
         })?
         .ok_or(AppError::Unauthenticated)?;
 
+    // Signature validation proves who issued the token; this comparison also
+    // enforces the account's current global-revocation version.
     let current_token_version: i32 = user.get("token_version");
     if i64::from(current_token_version) != token_version {
         return Err(AppError::Unauthenticated);
     }
 
-    Ok(Json(CurrentUserResponse {
+    Ok(Json(UserResponse {
         id: user.get("id"),
         username: user.get("username"),
         email: user.get("email"),
@@ -569,11 +626,13 @@ pub(crate) async fn me(
 }
 
 #[cfg(test)]
+/// Validation and cookie-parsing tests for the authentication request helpers.
 mod tests {
     use super::{LoginRequest, PASSWORD_MAX, RegisterRequest, refresh_token_from_headers};
     use axum::http::{HeaderMap, HeaderValue, header};
     use rstest::{fixture, rstest};
 
+    /// Provide a valid registration payload for field-by-field validation cases.
     #[fixture]
     fn valid_request() -> RegisterRequest {
         RegisterRequest {
@@ -583,6 +642,7 @@ mod tests {
         }
     }
 
+    /// Provide a valid login payload for validation cases.
     #[fixture]
     fn valid_login_request() -> LoginRequest {
         LoginRequest {
@@ -591,11 +651,13 @@ mod tests {
         }
     }
 
+    /// Accept a registration payload whose fields satisfy the configured policy.
     #[rstest]
     fn accepts_a_valid_registration_payload(valid_request: RegisterRequest) {
         assert!(valid_request.validate().is_ok());
     }
 
+    /// Reject usernames that violate length or allowed-character constraints.
     #[rstest]
     #[case::too_short("ab")]
     #[case::contains_space("contains space")]
@@ -609,6 +671,7 @@ mod tests {
         assert!(valid_request.validate().is_err());
     }
 
+    /// Reject malformed email values before they reach persistence logic.
     #[rstest]
     #[case::missing_local_part("@example.test")]
     #[case::missing_domain("alex@")]
@@ -620,6 +683,7 @@ mod tests {
         assert!(valid_request.validate().is_err());
     }
 
+    /// Reject passwords outside the registration length policy.
     #[rstest]
     #[case::too_short("short".to_owned())]
     #[case::too_long("x".repeat(PASSWORD_MAX + 1))]
@@ -632,6 +696,7 @@ mod tests {
         assert!(valid_request.validate().is_err());
     }
 
+    /// Apply the same basic email-shape validation to login requests.
     #[rstest]
     #[case::missing_local_part("@example.test")]
     #[case::missing_domain("alex@")]
@@ -642,6 +707,7 @@ mod tests {
         assert!(valid_login_request.validate().is_err());
     }
 
+    /// Reject login passwords that are empty or exceed the accepted maximum.
     #[rstest]
     #[case::empty("")]
     #[case::too_long("x".repeat(PASSWORD_MAX + 1))]
@@ -654,6 +720,7 @@ mod tests {
         assert!(valid_login_request.validate().is_err());
     }
 
+    /// Find the refresh token even when other cookies share the header.
     #[rstest]
     fn finds_refresh_token_among_other_cookies() {
         let mut headers = HeaderMap::new();
@@ -665,6 +732,7 @@ mod tests {
         assert_eq!(refresh_token_from_headers(&headers), Some("opaque-value"));
     }
 
+    /// Return no token when the cookie is missing, empty, or has another name.
     #[rstest]
     #[case::missing_cookie(None)]
     #[case::empty_cookie(Some("refresh_token="))]

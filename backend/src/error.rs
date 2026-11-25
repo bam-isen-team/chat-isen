@@ -1,3 +1,5 @@
+//! Error types shared by request handlers and their HTTP representations.
+
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -40,6 +42,7 @@ pub enum AppError {
 /// one source of truth. `Internal` stays deliberately mute here: its true
 /// cause has already been traced at the mapping site in the handler.
 impl IntoResponse for AppError {
+    /// Convert an application error into its stable JSON HTTP response.
     fn into_response(self) -> Response {
         let (status, message): (StatusCode, String) = match &self {
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
@@ -60,6 +63,7 @@ impl IntoResponse for AppError {
 // ever forget to diagnose it.
 
 impl From<PasswordError> for AppError {
+    /// Log internal password-processing details and return a generic server error.
     fn from(err: PasswordError) -> Self {
         tracing::error!(cause = %err, "password hashing or verification failed");
         AppError::Internal
@@ -67,6 +71,7 @@ impl From<PasswordError> for AppError {
 }
 
 impl From<JwtError> for AppError {
+    /// Log internal JWT-processing details and return a generic server error.
     fn from(err: JwtError) -> Self {
         tracing::error!(cause = %err, "jwt operation failed");
         AppError::Internal

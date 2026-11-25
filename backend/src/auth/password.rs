@@ -36,6 +36,9 @@ pub enum PasswordError {
 /// required by ADR-001 (Argon2id, m = 19456 KiB, t = 2, p = 1). The returned
 /// PHC string (`$argon2id$v=19$m=19456,...`) is meant to be stored as-is in
 /// `users.password_hash`.
+///
+/// # Errors
+/// Returns an error if Argon2 cannot produce a password hash.
 pub fn hash_password(plain: &str) -> Result<String, PasswordError> {
     Argon2::default()
         .hash_password(plain.as_bytes())
@@ -49,6 +52,9 @@ pub fn hash_password(plain: &str) -> Result<String, PasswordError> {
 /// wrong (invalid credentials are NOT a system error, cf. ADR-001 §2:
 /// generic 401), and `Err` when the stored hash itself is unusable
 /// (unparseable, unsupported algorithm...).
+///
+/// # Errors
+/// Returns an error if the stored PHC hash is malformed or unusable.
 pub fn verify_password(plain: &str, phc: &str) -> Result<bool, PasswordError> {
     let parsed = PasswordHash::new(phc).map_err(PasswordError::Parse)?;
     match Argon2::default().verify_password(plain.as_bytes(), &parsed) {
@@ -59,6 +65,7 @@ pub fn verify_password(plain: &str, phc: &str) -> Result<bool, PasswordError> {
 }
 
 #[cfg(test)]
+/// Password hashing, verification, and malformed-hash tests.
 mod tests {
     use super::{PasswordError, hash_password, verify_password};
     use rstest::{fixture, rstest};
@@ -69,6 +76,7 @@ mod tests {
     // The primary contract: a hash this module produces can be verified back.
     // It is the canary of the module — the first test to fail if an argon2
     // upgrade ever breaks the roundtrip, long before any endpoint does.
+    /// Hash and verify the same password successfully.
     #[rstest]
     fn roundtrip_works() {
         let phc = hash_password("test").expect("hashing should succeed");
@@ -79,6 +87,7 @@ mod tests {
 
     // One Argon2id hash of the reference password, amortized over the cases
     // below (hashing is slow ON PURPOSE; never pay it repeatedly for nothing).
+    /// Compute one stored hash reused by wrong-password parameter cases.
     #[fixture]
     fn stored_hash() -> String {
         hash_password(REFERENCE_PWD).expect("hashing the reference password should succeed")
@@ -87,6 +96,7 @@ mod tests {
     // Contract of the future 401 (cf. ADR-001 §2): a wrong password is a clean
     // `Ok(false)`, never a system error. If this test ever fails with an Err,
     // the login layer would start answering 500 to bad credentials.
+    /// Treat an incorrect password as `Ok(false)` rather than a system error.
     #[rstest]
     #[case::empty("")]
     #[case::almost_identical("correct horse battery stapl")]
@@ -101,6 +111,7 @@ mod tests {
     // Fresh salt on every call: same password in, two different hashes out —
     // yet both valid. Without a fresh salt, two users sharing a password would
     // show IDENTICAL password_hash columns in a database dump.
+    /// Use a fresh salt for identical passwords while keeping both hashes valid.
     #[rstest]
     fn same_password_yields_different_hashes() {
         let hash1 = hash_password("letmein123").expect("hashing should succeed");
@@ -113,6 +124,7 @@ mod tests {
 
     // Cross-artifact coherence: what Rust produces must satisfy what the SQL
     // CHECK (`password_hash LIKE '$argon2%'`) will enforce at insert time.
+    /// Keep the encoded hash format aligned with the database check and ADR.
     #[rstest]
     fn hash_format_matches_sql_check() {
         let phc = hash_password("formatting").expect("hashing should succeed");
@@ -123,6 +135,7 @@ mod tests {
 
     // Hostile input: an unparseable stored hash is a Parse error, never a panic
     // (this string will one day come from database content we do not control).
+    /// Return a parse error for malformed stored hash strings.
     #[rstest]
     #[case::empty("")]
     #[case::truncated("$argon2id$")]
@@ -138,6 +151,7 @@ mod tests {
     // Edge exploration: pin what the hashing LAYER does for extreme inputs.
     // The registration POLICY (non-empty, bounded length) is M3's validation
     // job — remember that layer split when this surprises you.
+    /// Hash and verify extreme lengths without panicking at this low-level layer.
     #[rstest]
     #[case::empty_password(String::new())]
     #[case::very_long("x".repeat(1000))]

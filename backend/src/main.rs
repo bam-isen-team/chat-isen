@@ -1,6 +1,7 @@
 use backend::{config, routes, state};
 
 #[tokio::main]
+/// Load configuration, prepare application state, and serve HTTP requests.
 async fn main() {
     dotenvy::dotenv().ok();
 
@@ -9,11 +10,11 @@ async fn main() {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(log_filter).init();
 
-    // Init the config
+    // Read secrets and bind settings once, then share them with request handlers.
     let config =
         config::Config::from_env().expect("invalid configuration: check .env / .env.example");
 
-    // Init the PostgreSQL pool
+    // Build the connection pool before binding so startup fails early on bad configuration.
     let pg_config = config
         .database_config()
         .expect("invalid DATABASE_URL: expected postgres://user:password@host:port/db");

@@ -28,10 +28,12 @@ pub struct AccessClaims {
 }
 
 impl AccessClaims {
+    /// Return the subject string carried by this verified access token.
     pub(crate) fn subject(&self) -> &str {
         &self.sub
     }
 
+    /// Return the user's token-version value carried by this access token.
     pub(crate) fn token_version(&self) -> i64 {
         self.ver
     }
@@ -54,6 +56,9 @@ pub enum JwtError {
 /// The claims are built here — this is the identity the token certifies:
 /// `sub`/`ver` come from the caller, timestamps from the clock, `jti` is
 /// unique per token (cf. ADR-001 §1) — then sealed with HS256.
+///
+/// # Errors
+/// Returns an error if the configured secret cannot be decoded or signing fails.
 pub fn mint_access_token(secret: &str, sub: &str, ver: i64) -> Result<String, JwtError> {
     // HS256 by intention, never by default (cf. ADR-001: algorithm pinned).
     let header = Header::new(Algorithm::HS256);
@@ -76,6 +81,9 @@ pub fn mint_access_token(secret: &str, sub: &str, ver: i64) -> Result<String, Jw
 /// Signature, expiration AND algorithm are checked. The token's own header
 /// is never trusted: only HS256 is accepted, anything else ("none",
 /// "HS384", "RS256"...) is rejected as a matter of policy (cf. ADR-001).
+///
+/// # Errors
+/// Returns an error if the secret is malformed or the token fails validation.
 pub fn verify_access_token(secret: &str, token: &str) -> Result<AccessClaims, JwtError> {
     // Same key derivation as mint — the module's internal contract.
     let key = DecodingKey::from_base64_secret(secret).map_err(JwtError::Invalid)?;
@@ -88,6 +96,7 @@ pub fn verify_access_token(secret: &str, token: &str) -> Result<AccessClaims, Jw
 }
 
 #[cfg(test)]
+/// Access-token signing and validation tests.
 mod tests {
     use super::*;
     use rstest::rstest;
@@ -98,6 +107,7 @@ mod tests {
     // A second, different secret, to prove the signature engages THIS secret.
     const OTHER_SECRET: &str = "Y29tcGxldGVseS1vdGhlci1rZXktZm9yLXZlcmlmeQ==";
 
+    /// Preserve the user identity and token version through signing and verification.
     #[rstest]
     fn roundtrip_preserves_identity() {
         let token =
@@ -123,6 +133,7 @@ mod tests {
 
     // A perfectly signed token, simply expired one hour ago (well beyond the
     // validation leeway).
+    /// Reject a correctly signed token whose expiration time has passed.
     #[rstest]
     fn expired_token_is_rejected() {
         let now = chrono::Utc::now().timestamp();
@@ -144,6 +155,7 @@ mod tests {
     // THE ADR-001 security case: a token whose signature is perfectly valid
     // (same secret) but which claims a different algorithm. The pinned
     // validation rejects it as a matter of policy, not of signature.
+    /// Reject a token signed with an algorithm other than the pinned HS256.
     #[rstest]
     fn wrong_algorithm_is_rejected() {
         let now = chrono::Utc::now().timestamp();
@@ -162,6 +174,7 @@ mod tests {
         assert!(matches!(res, Err(JwtError::Invalid(_))), "got: {res:?}");
     }
 
+    /// Reject a token whose signature was made with a different secret.
     #[rstest]
     fn wrong_secret_is_rejected() {
         let token = mint_access_token(TEST_SECRET, "user-uuid", 1).expect("minting should succeed");
@@ -171,6 +184,7 @@ mod tests {
     }
 
     // Attacker-controlled input must degrade cleanly, never panic.
+    /// Reject malformed token strings without panicking.
     #[rstest]
     #[case::empty("")]
     #[case::three_bad_segments("a.b.c")]
@@ -183,6 +197,7 @@ mod tests {
     // The module's internal contract is base64 secrets (cf. module doc): an
     // unusable secret must fail loudly at mint time — this is where a future
     // corrupted .env will explode, with the right family of error.
+    /// Report an unusable signing secret as a minting failure.
     #[rstest]
     fn non_base64_secret_fails_loudly() {
         let res = mint_access_token("!!! definitely not base64 !!!", "user-uuid", 1);

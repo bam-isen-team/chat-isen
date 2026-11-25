@@ -9,26 +9,31 @@ use axum::{
 use crate::auth::rate_limit::{AuthRateLimiter, limit_auth_requests};
 use crate::state::AppState;
 
+/// Build the HTTP router and apply shared state and authentication policies.
 pub fn build_router(state: AppState) -> Router {
+    // Only password/refresh operations consume these quotas; GET /auth/me is
+    // authenticated but does not use the request-rate buckets.
     let limited_auth_routes = Router::new()
         .route("/auth/register", post(crate::auth::handlers::register))
         .route("/auth/login", post(crate::auth::handlers::login))
         .route("/auth/refresh", post(crate::auth::handlers::refresh))
-        .route("/auth/me", get(crate::auth::handlers::me))
         .layer(middleware::from_fn_with_state(
             AuthRateLimiter::default(),
             limit_auth_requests,
         ));
 
+    let current_user_route = Router::new().route("/auth/me", get(crate::auth::handlers::me));
     let logout_route = Router::new().route("/auth/logout", post(crate::auth::handlers::logout));
 
     Router::new()
         .route("/health", get(health))
         .merge(limited_auth_routes)
+        .merge(current_user_route)
         .merge(logout_route)
         .with_state(state)
 }
 
+/// Check that PostgreSQL is reachable and can execute a simple query.
 async fn health(State(state): State<AppState>) -> StatusCode {
     // Check a connection out of the pool: failure means the db is
     // unreachable (stopped, network issue, pool timed out).
@@ -58,6 +63,7 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
+    /// Build the router with a lazy, deliberately unreachable database pool.
     fn test_router() -> Router {
         let pg_config = "host=127.0.0.1 port=1 user=test dbname=chatisen_test"
             .parse()
@@ -74,6 +80,7 @@ mod tests {
         build_router(AppState::new(pool, Arc::new(config)))
     }
 
+    /// Ensure registration is rate limited while the idempotent logout route is not.
     #[tokio::test]
     async fn register_is_throttled_and_logout_is_not() {
         let app = test_router();

@@ -15,19 +15,28 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Duration of one fixed rate-limit window.
 const WINDOW: Duration = Duration::from_secs(60);
+/// Registration attempts allowed from one IP during a window.
 const REGISTER_LIMIT: u32 = 5;
+/// Login attempts allowed from one IP during a window.
 const LOGIN_LIMIT: u32 = 10;
+/// Refresh attempts allowed from one IP during a window.
 const REFRESH_LIMIT: u32 = 20;
 
+/// Authentication endpoint buckets with independent request quotas.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 enum AuthEndpoint {
+    /// New-account registration.
     Register,
+    /// Credential verification and session creation.
     Login,
+    /// Refresh-token rotation.
     Refresh,
 }
 
 impl AuthEndpoint {
+    /// Map eligible POST requests to their rate-limit bucket.
     fn from_request(request: &Request) -> Option<Self> {
         if request.method() != Method::POST {
             return None;
@@ -41,6 +50,7 @@ impl AuthEndpoint {
         }
     }
 
+    /// Return the quota configured for this endpoint.
     fn limit(self) -> u32 {
         match self {
             Self::Register => REGISTER_LIMIT,
@@ -50,9 +60,12 @@ impl AuthEndpoint {
     }
 }
 
+/// Request count and start time for one IP-and-endpoint bucket.
 #[derive(Clone, Copy)]
 struct WindowCounter {
+    /// Monotonic start time of the current fixed window.
     started_at: Instant,
+    /// Number of accepted requests in the current window.
     requests: u32,
 }
 
@@ -63,16 +76,20 @@ pub(crate) struct AuthRateLimiter {
 }
 
 impl AuthRateLimiter {
+    /// Record one request using the current monotonic time.
     fn check(&self, ip: IpAddr, endpoint: AuthEndpoint) -> Result<(), Duration> {
         self.check_at(ip, endpoint, Instant::now())
     }
 
+    /// Record a request at `now`, returning remaining wait time when over quota.
     fn check_at(&self, ip: IpAddr, endpoint: AuthEndpoint, now: Instant) -> Result<(), Duration> {
         let mut counters = self
             .counters
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
+        // Expired buckets can be discarded on every check to keep old client
+        // addresses from accumulating indefinitely in this process.
         counters.retain(|_, counter| now.saturating_duration_since(counter.started_at) < WINDOW);
 
         let counter = counters.entry((ip, endpoint)).or_insert(WindowCounter {
@@ -86,6 +103,7 @@ impl AuthRateLimiter {
             counter.requests = 0;
         }
 
+        // The first `limit` requests pass; the next one receives a retry delay.
         if counter.requests >= endpoint.limit() {
             return Err(WINDOW.saturating_sub(elapsed));
         }
@@ -95,6 +113,7 @@ impl AuthRateLimiter {
     }
 }
 
+/// Apply the configured per-IP quota to matching authentication POST requests.
 pub(crate) async fn limit_auth_requests(
     State(limiter): State<AuthRateLimiter>,
     request: Request,
@@ -105,7 +124,7 @@ pub(crate) async fn limit_auth_requests(
     };
 
     // The production listener installs ConnectInfo. The localhost fallback
-    // keeps direct Router tests deterministic when no socket exists.
+    // gives direct in-process Router calls a stable bucket when no socket exists.
     let peer_ip = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -118,12 +137,15 @@ pub(crate) async fn limit_auth_requests(
     }
 }
 
+/// Build the standard 429 JSON response and its cache/retry headers.
 fn rate_limited_response(retry_after: Duration) -> Response {
     let mut response = (
         StatusCode::TOO_MANY_REQUESTS,
         Json(json!({ "error": "too many requests" })),
     )
         .into_response();
+    // Retry-After uses whole seconds, so round up to avoid telling clients to
+    // retry before the bucket has actually expired.
     let retry_after_secs = retry_after
         .as_secs()
         .saturating_add(u64::from(retry_after.subsec_nanos() > 0))
@@ -141,6 +163,7 @@ fn rate_limited_response(retry_after: Duration) -> Response {
 }
 
 #[cfg(test)]
+/// Unit tests for endpoint quotas, bucket separation, and retry headers.
 mod tests {
     use super::{
         AuthEndpoint, AuthRateLimiter, LOGIN_LIMIT, REFRESH_LIMIT, REGISTER_LIMIT, WINDOW,
@@ -151,10 +174,12 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::{Duration, Instant};
 
+    /// Build a documentation-range IPv4 address for isolated test buckets.
     fn test_ip(last_octet: u8) -> IpAddr {
         IpAddr::V4(Ipv4Addr::new(192, 0, 2, last_octet))
     }
 
+    /// Allow exactly the configured quota, then reject the next request.
     #[rstest]
     #[case(AuthEndpoint::Register, REGISTER_LIMIT)]
     #[case(AuthEndpoint::Login, LOGIN_LIMIT)]
@@ -169,6 +194,7 @@ mod tests {
         assert_eq!(limiter.check_at(test_ip(1), endpoint, now), Err(WINDOW));
     }
 
+    /// Keep counts independent across client IPs and endpoint types.
     #[rstest]
     fn buckets_are_separate_by_ip_and_endpoint() {
         let limiter = AuthRateLimiter::default();
@@ -195,6 +221,7 @@ mod tests {
         );
     }
 
+    /// Start a fresh counter after the fixed window expires.
     #[rstest]
     fn counter_resets_after_the_window() {
         let limiter = AuthRateLimiter::default();
@@ -210,6 +237,7 @@ mod tests {
         );
     }
 
+    /// Return 429 and round Retry-After up to a whole second.
     #[rstest]
     fn throttle_response_is_429_with_rounded_retry_after() {
         let response = rate_limited_response(Duration::from_millis(1_500));

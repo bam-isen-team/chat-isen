@@ -17,6 +17,7 @@ pub(crate) struct AuthIdentity {
 impl FromRequestParts<AppState> for AuthIdentity {
     type Rejection = AppError;
 
+    /// Extract and verify the bearer access token before running a protected handler.
     async fn from_request_parts(
         parts: &mut Parts,
         state: &AppState,
@@ -40,6 +41,7 @@ impl FromRequestParts<AppState> for AuthIdentity {
     }
 }
 
+/// Return the token from a well-formed `Bearer <token>` authorization value.
 fn bearer_token(value: &str) -> Option<&str> {
     let mut parts = value.split_ascii_whitespace();
     let scheme = parts.next()?;

@@ -7,13 +7,14 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use serde_json::json;
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+use crate::error::ErrorResponse;
 
 /// Duration of one fixed rate-limit window.
 const WINDOW: Duration = Duration::from_secs(60);
@@ -141,7 +142,9 @@ pub(crate) async fn limit_auth_requests(
 fn rate_limited_response(retry_after: Duration) -> Response {
     let mut response = (
         StatusCode::TOO_MANY_REQUESTS,
-        Json(json!({ "error": "too many requests" })),
+        Json(ErrorResponse {
+            error: "too many requests".to_owned(),
+        }),
     )
         .into_response();
     // Retry-After uses whole seconds, so round up to avoid telling clients to

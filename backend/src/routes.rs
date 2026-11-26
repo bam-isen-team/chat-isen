@@ -6,9 +6,61 @@ use axum::{
     routing::{get, post},
 };
 use tower_http::cors::CorsLayer;
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::{Modify, OpenApi};
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::auth::rate_limit::{AuthRateLimiter, limit_auth_requests};
 use crate::state::AppState;
+
+/// OpenAPI description of the HTTP API.
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "Chat Isen API",
+        version = "0.1.0",
+        description = "HTTP API for Chat Isen authentication and health checks."
+    ),
+    paths(
+        health,
+        crate::auth::handlers::register,
+        crate::auth::handlers::login,
+        crate::auth::handlers::refresh,
+        crate::auth::handlers::logout,
+        crate::auth::handlers::me
+    ),
+    components(
+        schemas(
+            crate::auth::handlers::RegisterRequest,
+            crate::auth::handlers::LoginRequest,
+            crate::auth::handlers::AuthResponse,
+            crate::auth::handlers::UserResponse,
+            crate::error::ErrorResponse
+        )
+    ),
+    modifiers(&BearerAuth)
+)]
+pub struct ApiDoc;
+
+/// Register the Bearer JWT scheme used by the current-user endpoint.
+struct BearerAuth;
+
+impl Modify for BearerAuth {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi
+            .components
+            .get_or_insert_with(Default::default)
+            .add_security_scheme(
+                "BearerAuth",
+                SecurityScheme::Http(
+                    HttpBuilder::new()
+                        .scheme(HttpAuthScheme::Bearer)
+                        .bearer_format("JWT")
+                        .build(),
+                ),
+            );
+    }
+}
 
 /// Build the HTTP router and apply shared state and authentication policies.
 pub fn build_router(state: AppState) -> Router {
@@ -31,6 +83,10 @@ pub fn build_router(state: AppState) -> Router {
         .merge(limited_auth_routes)
         .merge(current_user_route)
         .merge(logout_route)
+        .merge(
+            SwaggerUi::new("/docs")
+                .url("/api-docs/openapi.json", ApiDoc::openapi()),
+        )
         .with_state(state)
         .layer(
             CorsLayer::new()
@@ -41,6 +97,15 @@ pub fn build_router(state: AppState) -> Router {
 }
 
 /// Check that PostgreSQL is reachable and can execute a simple query.
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "System",
+    responses(
+        (status = 200, description = "Database is reachable"),
+        (status = 503, description = "Database is unavailable")
+    )
+)]
 async fn health(State(state): State<AppState>) -> StatusCode {
     // Check a connection out of the pool: failure means the db is
     // unreachable (stopped, network issue, pool timed out).

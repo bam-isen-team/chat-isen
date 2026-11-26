@@ -5,7 +5,7 @@ use crate::{
         password::{hash_password, verify_password},
         tokens::{generate_refresh_token, hash_refresh_token},
     },
-    error::AppError,
+    error::{AppError, ErrorResponse},
     state::AppState,
 };
 use axum::{
@@ -32,7 +32,7 @@ const REFRESH_TOKEN_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 /// Registration payload. Accepted as JSON by the `Json` extractor in the
 /// register handler.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct RegisterRequest {
     /// Unique public username, constrained to the users table's allowed format.
     username: String,
@@ -43,7 +43,7 @@ pub struct RegisterRequest {
 }
 
 /// Login payload accepted by the JSON extractor.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct LoginRequest {
     /// Email address associated with the account.
     email: String,
@@ -52,8 +52,8 @@ pub struct LoginRequest {
 }
 
 /// JSON body returned after account creation, login, or token refresh.
-#[derive(Serialize)]
-struct AuthResponse {
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct AuthResponse {
     /// Short-lived bearer access token.
     access_token: String,
     /// Public account fields for the authenticated user.
@@ -61,7 +61,7 @@ struct AuthResponse {
 }
 
 /// Public account fields returned by token-issuing and current-user endpoints.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(crate) struct UserResponse {
     /// Stable user identifier.
     id: uuid::Uuid,
@@ -225,6 +225,22 @@ fn auth_response(
 ///
 /// # Errors
 /// Returns a validation error, a generic conflict response, or an internal error.
+#[utoipa::path(
+    post,
+    path = "/auth/register",
+    tag = "Auth",
+    request_body = RegisterRequest,
+    responses(
+        (status = 201, description = "Account created", body = AuthResponse,
+            headers(("Set-Cookie" = String, description = "HttpOnly refresh token cookie"))),
+        (status = 400, description = "Invalid registration fields", body = ErrorResponse),
+        (status = 409, description = "Username or email already taken", body = ErrorResponse),
+        (status = 429, description = "Too many requests",
+            body = ErrorResponse,
+            headers(("Retry-After" = String, description = "Seconds until another attempt is allowed"))),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
@@ -311,6 +327,22 @@ pub async fn register(
 ///
 /// # Errors
 /// Returns a validation error, generic invalid-credentials response, or internal error.
+#[utoipa::path(
+    post,
+    path = "/auth/login",
+    tag = "Auth",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Login successful", body = AuthResponse,
+            headers(("Set-Cookie" = String, description = "HttpOnly refresh token cookie"))),
+        (status = 400, description = "Invalid request fields", body = ErrorResponse),
+        (status = 401, description = "Invalid credentials", body = ErrorResponse),
+        (status = 429, description = "Too many requests",
+            body = ErrorResponse,
+            headers(("Retry-After" = String, description = "Seconds until another attempt is allowed"))),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
@@ -385,6 +417,22 @@ pub async fn login(
 ///
 /// # Errors
 /// Returns an internal error when a database operation or token signing fails.
+#[utoipa::path(
+    post,
+    path = "/auth/refresh",
+    tag = "Auth",
+    params(("refresh_token" = Option<String>, Cookie, description = "HttpOnly refresh token cookie")),
+    responses(
+        (status = 200, description = "Refresh token rotated", body = AuthResponse,
+            headers(("Set-Cookie" = String, description = "Replacement HttpOnly refresh token cookie"))),
+        (status = 401, description = "Missing, expired, or invalid refresh token", body = ErrorResponse,
+            headers(("Set-Cookie" = String, description = "Clears the refresh token cookie"))),
+        (status = 429, description = "Too many requests",
+            body = ErrorResponse,
+            headers(("Retry-After" = String, description = "Seconds until another attempt is allowed"))),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 pub async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -525,6 +573,17 @@ pub async fn refresh(
 ///
 /// # Errors
 /// Returns an internal error if the database cannot complete revocation.
+#[utoipa::path(
+    post,
+    path = "/auth/logout",
+    tag = "Auth",
+    params(("refresh_token" = Option<String>, Cookie, description = "HttpOnly refresh token cookie")),
+    responses(
+        (status = 204, description = "Logged out; refresh cookie cleared",
+            headers(("Set-Cookie" = String, description = "Clears the refresh token cookie"))),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -586,6 +645,17 @@ pub async fn logout(
 /// # Errors
 /// Returns `401` for a deleted user or stale token version, and `500` when the
 /// profile cannot be loaded because of a server-side failure.
+#[utoipa::path(
+    get,
+    path = "/auth/me",
+    tag = "Auth",
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Current user profile", body = UserResponse),
+        (status = 401, description = "Missing, invalid, or expired access token", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 pub(crate) async fn me(
     State(state): State<AppState>,
     AuthIdentity {

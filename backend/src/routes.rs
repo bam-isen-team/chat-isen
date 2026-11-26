@@ -8,6 +8,7 @@ use axum::{
 use tower_http::cors::CorsLayer;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::auth::rate_limit::{AuthRateLimiter, limit_auth_requests};
 use crate::state::AppState;
@@ -82,6 +83,10 @@ pub fn build_router(state: AppState) -> Router {
         .merge(limited_auth_routes)
         .merge(current_user_route)
         .merge(logout_route)
+        .merge(
+            SwaggerUi::new("/docs")
+                .url("/api-docs/openapi.json", ApiDoc::openapi()),
+        )
         .with_state(state)
         .layer(
             CorsLayer::new()

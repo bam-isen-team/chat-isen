@@ -14,11 +14,18 @@ main {
 }
 
 .login section {
-	background-color: #fff;
+	display: flex;
+	flex-direction: column;
 	width: 50%;
 	margin-left: 25%;
-	margin-top: 50px;
 	border-radius: 50px;
+}
+
+.loginform {
+	background-color: #fff;
+	margin-top: -20px;
+	border-bottom-left-radius: 50px;
+	border-bottom-right-radius: 50px;
 }
 
 .login h1{
@@ -34,17 +41,12 @@ main {
 	border-top-right-radius: 20px;
 }
 
-.login h3 {
-	color: #003879;
-	padding: 5px;
-}
-
-.login h4 {
+.loginform h3 {
 	color: #003879;
 	padding-bottom: 20px;
 }
 
-.login h4 a {
+.loginform h3 a {
 	color: #DB0033;
 }
 
@@ -54,10 +56,16 @@ main {
 	border-radius: 10px;
 	padding: 10px;
 	width: 30%;
+	cursor: pointer;
+}
+
+.login button:hover{
+	background-color: #004ba0;
 }
 
 .login button a {
 	color: #fff;
+
 }
 
 .login input {
@@ -66,4 +74,14 @@ main {
 	border-radius: 5px;
 	border-style: solid;
 	padding: 5px;
+	width: 50%;
+	margin-left: 10%;
+	margin-top: 20px;
+	margin-bottom: 10px;
+}
+
+.login label {
+	color: #003879;
+	text-align: left;
+	margin-left: 5px;
 }

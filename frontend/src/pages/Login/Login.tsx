@@ -8,13 +8,15 @@ export function Login() {
 			<h1>Welcome to Your ISEN Chat App</h1>
 			<section>
 				<h2>Login</h2>
-				<h3>Username</h3>
-				<input type="text" placeholder="Enter your username" class="input" />
-				<h3>Password</h3>
-				<input type="password" placeholder="Enter your password" class="input" />
-				<h3></h3>
-				<button class="button"><a href="/chat">Log In</a></button>
-				<h4>Not Registered? <a href="/registration">Sign Up</a></h4>
+				<div class="loginform">
+					<label for="username">Username:</label>
+					<input type="text" id="username" name="username" required />
+					<label for="password">Password:</label>
+					<input type="password" id="password" name="password" required />
+					<button type="submit">Log In</button>
+					<h3>Not Registered? <a href="/registration">Sign Up</a></h3>
+				</div>
+				
 			</section>
 			
 		</div>

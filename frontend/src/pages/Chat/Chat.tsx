@@ -1,1 +1,3 @@
-<h1>coucou</h1>
+export function Chat() {
+	return <h1>coucou</h1>;
+}

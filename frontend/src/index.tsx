@@ -5,6 +5,7 @@ import { Home } from './pages/Home/index.jsx';
 import { NotFound } from './pages/_404.jsx';
 import './style.css';
 import { Registration } from './pages/Registration/Registration.jsx';
+import { Chat } from './pages/Chat/Chat.jsx';
 
 export function App() {
 	return (
@@ -15,6 +16,7 @@ export function App() {
 					<Route path="/" component={Home} />
 					<Route path="/registration" component={Registration} />
 					<Route default component={NotFound} />
+					<Route path="/chat" component={Chat} />
 				</Router>
 			</main>
 		</LocationProvider>

@@ -6,7 +6,7 @@ main {
   	width: 100%;
 	box-sizing: border-box;
 	font-family: 'Jost', sans-serif;
-	background: linear-gradient(#003879, #004ba0)
+	background: linear-gradient(#003879, #0057bb)
 }
 .login {
 	
@@ -22,7 +22,7 @@ main {
 }
 
 .loginform {
-	background-color: #fff;
+	background-color: #efefef;
 	margin-top: -20px;
 	border-bottom-left-radius: 50px;
 	border-bottom-right-radius: 50px;
@@ -61,14 +61,10 @@ main {
 
 .login button:hover{
 	background-color: #004ba0;
+	transform: scale(1.08);
 }
 
-.login button a {
-	color: #fff;
-
-}
-
-.login input {
+.loginform input {
 	background-color: #fff;
 	color: #000;
 	border-radius: 5px;
@@ -80,7 +76,7 @@ main {
 	margin-bottom: 10px;
 }
 
-.login label {
+.loginform label {
 	color: #003879;
 	text-align: left;
 	margin-left: 5px;

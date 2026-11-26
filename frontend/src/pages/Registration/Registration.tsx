@@ -1,5 +1,6 @@
 import type { TargetedSubmitEvent } from 'preact';
 import { useState } from 'preact/hooks';
+import { useLocation } from 'preact-iso';
 import './Registration.css';
 import Logo from '../../assets/chat-isen-logo.png';
 
@@ -23,6 +24,7 @@ export function Registration() {
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const { route } = useLocation();
 
     async function handleSubmit(event: TargetedSubmitEvent<HTMLFormElement>) {
         event.preventDefault();
@@ -46,7 +48,7 @@ export function Registration() {
             if (response.status === 201) {
                 const result: RegistrationResponse = await response.json();
                 setSuccessMessage(`Registration successful. Welcome, ${result.user.display_name}!`);
-                return;
+                route('/chat');
             }
 
             if (response.status === 400) {

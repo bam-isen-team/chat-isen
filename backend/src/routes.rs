@@ -1,10 +1,11 @@
 use axum::{
     Router,
     extract::State,
-    http::StatusCode,
+    http::{HeaderValue, Method, StatusCode, header},
     middleware,
     routing::{get, post},
 };
+use tower_http::cors::CorsLayer;
 
 use crate::auth::rate_limit::{AuthRateLimiter, limit_auth_requests};
 use crate::state::AppState;
@@ -31,6 +32,12 @@ pub fn build_router(state: AppState) -> Router {
         .merge(current_user_route)
         .merge(logout_route)
         .with_state(state)
+        .layer(
+            CorsLayer::new()
+                .allow_origin(HeaderValue::from_static("http://localhost:5173"))
+                .allow_methods([Method::POST])
+                .allow_headers([header::CONTENT_TYPE]),
+        )
 }
 
 /// Check that PostgreSQL is reachable and can execute a simple query.

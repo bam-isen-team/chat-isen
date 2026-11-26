@@ -1,6 +1,7 @@
 import type { TargetedSubmitEvent } from 'preact';
 import { useState } from 'preact/hooks';
 import './Registration.css';
+import Logo from '../../assets/chat-isen-logo.png';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 
@@ -70,7 +71,9 @@ export function Registration() {
     }
 
     return (
+        
         <div class="registration">
+            <img src={Logo} alt="ChatISEN logo" height="160" width="160" />
             <h1>Registration Page</h1>
             <p>Welcome to the registration page! Please fill out the form below to create an account.</p>
             {errorMessage && <p role="alert">{errorMessage}</p>}
@@ -85,6 +88,7 @@ export function Registration() {
                 <button type="submit" disabled={isSubmitting}>
                     {isSubmitting ? 'Registering...' : 'Register'}
                 </button>
+                <h2>Already Registered? <a href="/">Sign In</a></h2>
             </form>
         </div>
     );

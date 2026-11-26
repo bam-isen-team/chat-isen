@@ -3,11 +3,19 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde_json::json;
+use serde::Serialize;
 use thiserror::Error;
+use utoipa::ToSchema;
 
 use crate::auth::jwt::JwtError;
 use crate::auth::password::PasswordError;
+
+/// Stable JSON shape used for API error responses.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorResponse {
+    /// Human-readable error message.
+    pub error: String,
+}
 
 /// Application-wide HTTP errors (cf. M3): each variant becomes a clean API
 /// response via `IntoResponse` — never a raw panic, never a leaked detail.
@@ -52,7 +60,7 @@ impl IntoResponse for AppError {
             AppError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 
-        (status, Json(json!({ "error": message }))).into_response()
+        (status, Json(ErrorResponse { error: message })).into_response()
     }
 }
 

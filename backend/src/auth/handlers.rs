@@ -32,7 +32,7 @@ const REFRESH_TOKEN_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 /// Registration payload. Accepted as JSON by the `Json` extractor in the
 /// register handler.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct RegisterRequest {
     /// Unique public username, constrained to the users table's allowed format.
     username: String,
@@ -43,7 +43,7 @@ pub struct RegisterRequest {
 }
 
 /// Login payload accepted by the JSON extractor.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct LoginRequest {
     /// Email address associated with the account.
     email: String,
@@ -52,7 +52,7 @@ pub struct LoginRequest {
 }
 
 /// JSON body returned after account creation, login, or token refresh.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct AuthResponse {
     /// Short-lived bearer access token.
     access_token: String,
@@ -61,7 +61,7 @@ struct AuthResponse {
 }
 
 /// Public account fields returned by token-issuing and current-user endpoints.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(crate) struct UserResponse {
     /// Stable user identifier.
     id: uuid::Uuid,

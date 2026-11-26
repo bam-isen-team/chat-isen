@@ -1,0 +1,83 @@
+main {
+	display: flex;
+  	align-items: center;
+  	justify-content: center;
+  	height: 100vh;
+  	width: 100%;
+	box-sizing: border-box;
+	font-family: 'Jost', sans-serif;
+	background: linear-gradient(#003879, #0057bb)
+}
+.login {
+	
+	text-align: center;
+}
+
+.login section {
+	display: flex;
+	flex-direction: column;
+	width: 50%;
+	margin-left: 25%;
+	border-radius: 50px;
+}
+
+.loginform {
+	background-color: #efefef;
+	margin-top: -20px;
+	border-bottom-left-radius: 50px;
+	border-bottom-right-radius: 50px;
+}
+
+.login h1{
+	color:#fff;
+	margin: 20px;
+	font-size: 50px;
+}
+
+.login h2 {
+	background-color: #DB0033;
+	padding: 10px;
+	border-top-left-radius: 20px;
+	border-top-right-radius: 20px;
+}
+
+.loginform h3 {
+	color: #003879;
+	padding-bottom: 20px;
+}
+
+.loginform h3 a {
+	color: #DB0033;
+}
+
+.login button {
+	color: #fff;
+	background-color: #003879;
+	border-radius: 10px;
+	padding: 10px;
+	width: 30%;
+	cursor: pointer;
+}
+
+.login button:hover{
+	background-color: #004ba0;
+	transform: scale(1.08);
+}
+
+.loginform input {
+	background-color: #fff;
+	color: #000;
+	border-radius: 5px;
+	border-style: solid;
+	padding: 5px;
+	width: 50%;
+	margin-left: 10%;
+	margin-top: 20px;
+	margin-bottom: 10px;
+}
+
+.loginform label {
+	color: #003879;
+	text-align: left;
+	margin-left: 5px;
+}

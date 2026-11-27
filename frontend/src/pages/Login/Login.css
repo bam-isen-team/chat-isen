@@ -1,23 +1,18 @@
-main {
+.login {
 	display: flex;
+	flex-direction: column;
   	align-items: center;
   	justify-content: center;
   	height: 100vh;
   	width: 100%;
 	box-sizing: border-box;
 	font-family: 'Jost', sans-serif;
-	background: linear-gradient(#003879, #0057bb)
-}
-.login {
-	
+	background: linear-gradient(#003879, #0057bb);
 	text-align: center;
 }
 
 .login section {
-	display: flex;
-	flex-direction: column;
-	width: 50%;
-	margin-left: 25%;
+	width: 30%;
 	border-radius: 50px;
 }
 

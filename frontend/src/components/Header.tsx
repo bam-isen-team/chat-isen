@@ -1,15 +1,5 @@
-import { useLocation } from 'preact-iso';
+import Logo from '../assets/chat-isen-logo.png'
 
 export function Header() {
-	const { url } = useLocation();
-
-	return (
-		<header>
-			<nav>
-				<a href="/" class={url == '/' && 'active'}>
-					Login
-				</a>
-			</nav>
-		</header>
-	);
+	return;
 }
